@@ -2,9 +2,7 @@
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Tuple
-# CHANGE: Added LineString to the import list
 from shapely.geometry import Polygon, Point, LineString
-
 import config
 
 @dataclass
@@ -27,6 +25,13 @@ class ChargingPad:
     id: int
     location: Tuple[float, float, float]
 
+@dataclass
+class Building:
+    id: int
+    center_xy: Tuple[float, float]
+    radius: float
+    height: float
+
 class Environment:
     """Manages the state of the physical environment for the simulation."""
     def __init__(self, seed=42):
@@ -36,8 +41,8 @@ class Environment:
         self.orders: List[Order] = []
         self.charging_pads: List[ChargingPad] = []
         self.no_fly_zones: List[Polygon] = []
+        self.buildings: List[Building] = []
         self.wind_vector: np.ndarray = self._generate_wind()
-
         self._create_scenario()
 
     def _generate_wind(self):
@@ -57,14 +62,15 @@ class Environment:
             )
             payload = np.random.uniform(0.5, config.DRONE_MAX_PAYLOAD_KG - 1)
             self.orders.append(Order(id=i, location=loc, payload_kg=payload))
-            
-        for i in range(config.NUM_CHARGING_PADS):
-             loc = (
-                np.random.uniform(self.bounds[0], self.bounds[2]),
-                np.random.uniform(self.bounds[1], self.bounds[3]),
-                0
+        
+        for i in range(config.NUM_BUILDINGS):
+            center_xy = (
+                np.random.uniform(self.bounds[0] * 0.2, self.bounds[2] * 0.8),
+                np.random.uniform(self.bounds[1] * 0.2, self.bounds[3] * 0.8)
             )
-             self.charging_pads.append(ChargingPad(id=i, location=loc))
+            radius = np.random.uniform(100, 300)
+            height = np.random.uniform(100, 250)
+            self.buildings.append(Building(id=i, center_xy=center_xy, radius=radius, height=height))
 
         center_x = (self.bounds[0] + self.bounds[2]) / 2
         center_y = (self.bounds[1] + self.bounds[3]) / 2
@@ -73,30 +79,9 @@ class Environment:
         self.no_fly_zones.append(nfz)
 
     def is_path_valid(self, p1, p2):
-        """Checks if a straight line path violates any no-fly zones."""
-        # For simplicity, we check in 2D (top-down view)
+        """Checks if a straight line path violates any 2D no-fly zones."""
         line = LineString([Point(p1[0], p1[1]), Point(p2[0], p2[1])])
         for zone in self.no_fly_zones:
             if line.intersects(zone):
                 return False
         return True
-
-    def get_all_locations(self) -> List[Tuple]:
-        locations = [d.start_location for d in self.drones]
-        locations += [o.location for o in self.orders]
-        locations += [p.location for p in self.charging_pads]
-        return locations
-
-    def get_location_map(self):
-        loc_map = {}
-        idx = 0
-        for drone in self.drones:
-            loc_map[idx] = {'type': 'depot', 'obj': drone}
-            idx += 1
-        for order in self.orders:
-            loc_map[idx] = {'type': 'order', 'obj': order}
-            idx += 1
-        for pad in self.charging_pads:
-            loc_map[idx] = {'type': 'pad', 'obj': pad}
-            idx += 1
-        return loc_map
