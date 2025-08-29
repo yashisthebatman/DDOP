@@ -6,6 +6,7 @@ from dwave.samplers import SimulatedAnnealingSampler
 import logging
 
 import config
+from utils.heuristics import a_star_search
 
 class PathPlanner3D:
     def __init__(self, env, predictor):
@@ -15,7 +16,7 @@ class PathPlanner3D:
         self.grid_shape, self.origin_lon, self.origin_lat = self._get_grid_params()
         self.grid = self._create_and_populate_grid()
         self.node_map, self.reverse_node_map = self._create_node_maps()
-        # self.smcf is no longer initialized here
+        self.moves = [(dx, dy, dz) for dx in [-1, 0, 1] for dy in [-1, 0, 1] for dz in [-1, 0, 1] if not (dx == 0 and dy == 0 and dz == 0)]
         logging.info(f"PathPlanner initialized with grid shape {self.grid_shape}. Total valid nodes: {len(self.node_map)}")
 
     # --- Grid and Node Setup ---
@@ -67,139 +68,133 @@ class PathPlanner3D:
 
     # --- Main Public Method ---
     def find_path(self, start_pos, end_pos, payload_kg, solver_choice):
+        start_coord = self._world_to_grid(start_pos)
+        end_coord = self._world_to_grid(end_pos)
+
+        if start_coord not in self.node_map:
+            logging.error(f"Start coordinate {start_coord} corresponds to an obstacle or is out of bounds.")
+            return None
+        if end_coord not in self.node_map:
+            logging.error(f"End coordinate {end_coord} corresponds to an obstacle or is out of bounds.")
+            return None
+
         if "OR-Tools" in solver_choice:
-            return self.find_path_with_or_tools(start_pos, end_pos, payload_kg)
+            return self.find_path_with_or_tools(start_coord, end_coord, payload_kg)
         else:
-            return self.find_path_with_qubo(start_pos, end_pos, payload_kg)
+            return self.find_path_with_qubo_hybrid(start_coord, end_coord, payload_kg)
 
     # --- Google OR-Tools Implementation (FIXED) ---
-    def find_path_with_or_tools(self, start_pos, end_pos, payload_kg):
-        start_coord, end_coord = self._world_to_grid(start_pos), self._world_to_grid(end_pos)
-        if start_coord not in self.node_map or end_coord not in self.node_map:
-            logging.error("OR-Tools: Start/end node is inside an obstacle or out of bounds.")
-            return None
+    def find_path_with_or_tools(self, start_coord, end_coord, payload_kg):
         start_node, end_node = self.node_map[start_coord], self.node_map[end_coord]
-
-        # Re-build the graph for each call with the specific costs for this payload and weather
-        smcf = min_cost_flow.SimpleMinCostFlow()
-        moves = [(dx, dy, dz) for dx in [-1, 0, 1] for dy in [-1, 0, 1] for dz in [-1, 0, 1] if not (dx == 0 and dy == 0 and dz == 0)]
         
-        infinite_cost = 9999999
-
+        # This smcf object is local and contains the actual solution
+        smcf = min_cost_flow.SimpleMinCostFlow()
+        
         for u_coord, u_idx in self.node_map.items():
-            for move in moves:
+            for move in self.moves:
                 v_coord = tuple(np.array(u_coord) + move)
                 if v_coord in self.node_map:
                     v_idx = self.node_map[v_coord]
-                    
-                    # Calculate cost for this specific arc
                     p1_world = self._grid_to_world(u_coord)
                     p2_world = self._grid_to_world(v_coord)
                     wind = self.env.weather.get_wind_at_location(p1_world[0], p1_world[1])
                     time, energy = self.predictor.predict(p1_world, p2_world, payload_kg, wind)
-                    
-                    if time == float('inf') or energy == float('inf'):
-                        cost = infinite_cost
-                    else:
-                        cost = int((time * 0.5 + energy * 0.5) * 100) # Using a weighted cost
-                    
+                    cost = int((time * 0.9 + energy * 0.1) * 100) if time != float('inf') else 999999
                     smcf.add_arc_with_capacity_and_unit_cost(u_idx, v_idx, 1, cost)
 
         smcf.set_node_supply(start_node, 1)
         smcf.set_node_supply(end_node, -1)
-        
         status = smcf.solve()
 
         if status != smcf.OPTIMAL:
-            logging.warning(f"OR-Tools pathfinder failed to find an optimal solution. Status: {status}")
+            logging.warning(f"OR-Tools pathfinder failed with status {status}.")
             return None
         
-        # Reconstruct path from the solution
         path = [self._grid_to_world(start_coord)]
         curr_node = start_node
-        visited_nodes = {start_node} # Prevent cycles
+        visited = {curr_node}
         
         while curr_node != end_node:
-            found_next_arc = False
+            found_next_step = False
+            # *** BUG FIX ***: Use the local `smcf` object that has the solution, not an old one.
             for i in range(smcf.num_arcs()):
                 if smcf.tail(i) == curr_node and smcf.flow(i) > 0:
                     next_node = smcf.head(i)
-                    if next_node in visited_nodes: continue # Skip if we've been here
-                    
-                    path.append(self._grid_to_world(self.reverse_node_map[next_node]))
-                    curr_node = next_node
-                    visited_nodes.add(curr_node)
-                    found_next_arc = True
-                    break
-            if not found_next_arc:
-                logging.error("OR-Tools path reconstruction failed: Path broken.")
-                return None # Path is broken
-        
+                    if next_node not in visited:
+                        visited.add(next_node)
+                        path.append(self._grid_to_world(self.reverse_node_map[next_node]))
+                        curr_node = next_node
+                        found_next_step = True
+                        break
+            if not found_next_step:
+                logging.error("OR-Tools path reconstruction failed.")
+                return None
         return path
 
-
-    # --- QUBO Implementation ---
-    def find_path_with_qubo(self, start_pos, end_pos, payload_kg):
-        start_coord, end_coord = self._world_to_grid(start_pos), self._world_to_grid(end_pos)
-        if start_coord not in self.node_map or end_coord not in self.node_map:
-            logging.error("QUBO: Start/end node in obstacle.")
+    # --- QUBO Hybrid Implementation (FIXED) ---
+    def find_path_with_qubo_hybrid(self, start_coord, end_coord, payload_kg):
+        heuristic_path_coords = a_star_search(start_coord, end_coord, self.grid, self.moves)
+        if not heuristic_path_coords:
+            logging.warning("A* pre-search failed to find a path. QUBO cannot proceed.")
             return None
-        start_node, end_node = self.node_map[start_coord], self.node_map[end_coord]
-
-        x = {}
-        moves = [(dx, dy, dz) for dx in [-1,0,1] for dy in [-1,0,1] for dz in [-1,0,1] if not (dx==0 and dy==0 and dz==0)]
-        for u_coord, u_idx in self.node_map.items():
-            for move in moves:
-                v_coord = tuple(np.array(u_coord) + move)
-                if v_coord in self.node_map:
-                    v_idx = self.node_map[v_coord]
-                    x[(u_idx, v_idx)] = pyqubo.Binary(f'x_{u_idx}_{v_idx}')
-
-        cost_hamiltonian = 0
-        for (u_idx, v_idx), var in x.items():
-            p1_world = self._grid_to_world(self.reverse_node_map[u_idx])
-            p2_world = self._grid_to_world(self.reverse_node_map[v_idx])
-            wind = self.env.weather.get_wind_at_location(p1_world[0], p1_world[1])
-            time, energy = self.predictor.predict(p1_world, p2_world, payload_kg, wind)
-            cost = int((time * 0.5 + energy * 0.5) * 100)
-            cost_hamiltonian += cost * var
         
-        # Increased penalty to better enforce constraints
-        P1 = 10000 
-        start_constraint = (sum(x.get((start_node, v_idx), 0) for v_idx in self.node_map.values()) - 1)**2
-        end_constraint = (sum(x.get((u_idx, end_node), 0) for u_idx in self.node_map.values()) - 1)**2
-        intermediate_constraint = 0
-        for i_idx in self.node_map.values():
-            if i_idx != start_node and i_idx != end_node:
-                inflow = sum(x.get((u_idx, i_idx), 0) for u_idx in self.node_map.values())
-                outflow = sum(x.get((i_idx, v_idx), 0) for v_idx in self.node_map.values())
-                intermediate_constraint += (inflow - outflow)**2
+        corridor_nodes = set(heuristic_path_coords)
+        for coord in heuristic_path_coords:
+            for move in self.moves:
+                neighbor = tuple(np.array(coord) + move)
+                if neighbor in self.node_map:
+                    corridor_nodes.add(neighbor)
+        
+        corridor_node_map = {coord: self.node_map[coord] for coord in corridor_nodes}
+        start_node, end_node = self.node_map[start_coord], self.node_map[end_coord]
+        
+        x = { (self.node_map[u], self.node_map[v]): pyqubo.Binary(f'x_{self.node_map[u]}_{self.node_map[v]}')
+              for u in corridor_node_map for move in self.moves if (v := tuple(np.array(u) + move)) in corridor_node_map }
+
+        if not x: return [self._grid_to_world(c) for c in heuristic_path_coords]
+
+        cost_hamiltonian = sum( int((t * 0.5 + e * 0.5) * 100) * var 
+                                for (u, v), var in x.items() 
+                                if (t_e := self.predictor.predict( self._grid_to_world(self.reverse_node_map[u]), 
+                                                                   self._grid_to_world(self.reverse_node_map[v]),
+                                                                   payload_kg, 
+                                                                   self.env.weather.get_wind_at_location(*self._grid_to_world(self.reverse_node_map[u])[:2]) ))
+                                and (t := t_e[0]) != float('inf') and (e := t_e[1]) )
+
+        P1 = 15000
+        start_constraint = (sum(x.get((start_node, v_idx), 0) for v_idx in corridor_node_map.values()) - 1)**2
+        end_constraint = (sum(x.get((u_idx, end_node), 0) for u_idx in corridor_node_map.values()) - 1)**2
+        intermediate_constraint = sum( (sum(x.get((u, i), 0) for u in corridor_node_map.values()) - 
+                                       sum(x.get((i, v), 0) for v in corridor_node_map.values()))**2
+                                       for i in corridor_node_map.values() if i != start_node and i != end_node )
 
         H = cost_hamiltonian + P1 * (start_constraint + end_constraint + intermediate_constraint)
         model = H.compile()
-        qubo, offset = model.to_qubo()
-        sampler = SimulatedAnnealingSampler()
-        sampleset = sampler.sample_qubo(qubo, num_reads=15, num_sweeps=1000)
-        decoded_sample = model.decode_sample(sampleset.first.sample, vartype='BINARY')
+        qubo, _ = model.to_qubo()
         
-        # --- Robust Path Reconstruction ---
+        sampler = SimulatedAnnealingSampler()
+        sampleset = sampler.sample_qubo(qubo, num_reads=10, num_sweeps=500)
+        decoded_sample = model.decode_sample(sampleset.first.sample, vartype='BINARY')
+
         path = [self._grid_to_world(start_coord)]
         curr_node = start_node
         
-        # Create a lookup dictionary from the solver's result for efficiency
-        solution_arcs = {u: v for (u, v), var in x.items() if decoded_sample.array[var.label][0] > 0.5}
+        # *** BUG FIX ***: The 'decoded_sample.array' object is not a dict and has no '.get' method.
+        # We need to check if the variable label exists in the solution dictionary.
+        solution_arcs = {u: v for (u, v), var in x.items() if var.label in decoded_sample.sample and decoded_sample.sample[var.label] > 0.5}
 
-        for _ in range(len(self.node_map)): # Failsafe to prevent infinite loops
+        for _ in range(len(corridor_node_map) + 1):
+            if curr_node == end_node: break
             if curr_node not in solution_arcs:
-                logging.warning("QUBO path reconstruction failed: Path broken.")
-                return None
+                logging.warning("QUBO path reconstruction failed. Falling back to A* path.")
+                return [self._grid_to_world(c) for c in heuristic_path_coords]
             
             next_node = solution_arcs[curr_node]
             path.append(self._grid_to_world(self.reverse_node_map[next_node]))
             curr_node = next_node
+        
+        if curr_node != end_node:
+            logging.warning("QUBO path did not reach destination. Falling back to A* path.")
+            return [self._grid_to_world(c) for c in heuristic_path_coords]
             
-            if curr_node == end_node:
-                return path # Success
-                
-        logging.warning("QUBO path reconstruction failed: Path did not reach destination.")
-        return None
+        return path
