@@ -15,7 +15,7 @@ class PathPlanner3D:
         self.grid_shape, self.origin_lon, self.origin_lat = self._get_grid_params()
         self.grid = self._create_and_populate_grid()
         self.node_map, self.reverse_node_map = self._create_node_maps()
-        self.smcf = self._build_or_tools_graph()
+        # self.smcf is no longer initialized here
         logging.info(f"PathPlanner initialized with grid shape {self.grid_shape}. Total valid nodes: {len(self.node_map)}")
 
     # --- Grid and Node Setup ---
@@ -72,60 +72,71 @@ class PathPlanner3D:
         else:
             return self.find_path_with_qubo(start_pos, end_pos, payload_kg)
 
-    # --- Google OR-Tools Implementation ---
-    def _build_or_tools_graph(self):
-        smcf = min_cost_flow.SimpleMinCostFlow()
-        moves = [(dx, dy, dz) for dx in [-1,0,1] for dy in [-1,0,1] for dz in [-1,0,1] if not (dx==0 and dy==0 and dz==0)]
-        for start_coord, start_node_idx in self.node_map.items():
-            for move in moves:
-                end_coord = tuple(np.array(start_coord) + move)
-                if end_coord in self.node_map:
-                    end_node_idx = self.node_map[end_coord]
-                    smcf.add_arc_with_capacity_and_unit_cost(start_node_idx, end_node_idx, 1, 0)
-        return smcf
-
+    # --- Google OR-Tools Implementation (FIXED) ---
     def find_path_with_or_tools(self, start_pos, end_pos, payload_kg):
         start_coord, end_coord = self._world_to_grid(start_pos), self._world_to_grid(end_pos)
         if start_coord not in self.node_map or end_coord not in self.node_map:
-            logging.error("OR-Tools: Start/end node in obstacle.")
+            logging.error("OR-Tools: Start/end node is inside an obstacle or out of bounds.")
             return None
         start_node, end_node = self.node_map[start_coord], self.node_map[end_coord]
 
+        # Re-build the graph for each call with the specific costs for this payload and weather
+        smcf = min_cost_flow.SimpleMinCostFlow()
+        moves = [(dx, dy, dz) for dx in [-1, 0, 1] for dy in [-1, 0, 1] for dz in [-1, 0, 1] if not (dx == 0 and dy == 0 and dz == 0)]
+        
         infinite_cost = 9999999
-        for i in range(self.smcf.num_arcs()):
-            p1_world = self._grid_to_world(self.reverse_node_map[self.smcf.tail(i)])
-            p2_world = self._grid_to_world(self.reverse_node_map[self.smcf.head(i)])
-            wind = self.env.weather.get_wind_at_location(p1_world[0], p1_world[1])
-            time, energy = self.predictor.predict(p1_world, p2_world, payload_kg, wind)
-            
-            if time == float('inf') or energy == float('inf'):
-                cost = infinite_cost
-            else:
-                cost = int((time * 0.5 + energy * 0.5) * 100)
-            self.smcf.set_arc_unit_cost(i, cost)
 
-        self.smcf.set_node_supply(start_node, 1)
-        self.smcf.set_node_supply(end_node, -1)
-        status = self.smcf.solve()
-        self.smcf.set_node_supply(start_node, 0)
-        self.smcf.set_node_supply(end_node, 0)
+        for u_coord, u_idx in self.node_map.items():
+            for move in moves:
+                v_coord = tuple(np.array(u_coord) + move)
+                if v_coord in self.node_map:
+                    v_idx = self.node_map[v_coord]
+                    
+                    # Calculate cost for this specific arc
+                    p1_world = self._grid_to_world(u_coord)
+                    p2_world = self._grid_to_world(v_coord)
+                    wind = self.env.weather.get_wind_at_location(p1_world[0], p1_world[1])
+                    time, energy = self.predictor.predict(p1_world, p2_world, payload_kg, wind)
+                    
+                    if time == float('inf') or energy == float('inf'):
+                        cost = infinite_cost
+                    else:
+                        cost = int((time * 0.5 + energy * 0.5) * 100) # Using a weighted cost
+                    
+                    smcf.add_arc_with_capacity_and_unit_cost(u_idx, v_idx, 1, cost)
 
-        if status != self.smcf.OPTIMAL:
-            logging.warning(f"OR-Tools pathfinder failed with status {status}.")
+        smcf.set_node_supply(start_node, 1)
+        smcf.set_node_supply(end_node, -1)
+        
+        status = smcf.solve()
+
+        if status != smcf.OPTIMAL:
+            logging.warning(f"OR-Tools pathfinder failed to find an optimal solution. Status: {status}")
             return None
         
+        # Reconstruct path from the solution
         path = [self._grid_to_world(start_coord)]
-        curr = start_node
-        while curr != end_node:
-            found = False
-            for i in range(self.smcf.num_arcs()):
-                if self.smcf.tail(i) == curr and self.smcf.flow(i) > 0:
-                    curr = self.smcf.head(i)
-                    path.append(self._grid_to_world(self.reverse_node_map[curr]))
-                    found = True
+        curr_node = start_node
+        visited_nodes = {start_node} # Prevent cycles
+        
+        while curr_node != end_node:
+            found_next_arc = False
+            for i in range(smcf.num_arcs()):
+                if smcf.tail(i) == curr_node and smcf.flow(i) > 0:
+                    next_node = smcf.head(i)
+                    if next_node in visited_nodes: continue # Skip if we've been here
+                    
+                    path.append(self._grid_to_world(self.reverse_node_map[next_node]))
+                    curr_node = next_node
+                    visited_nodes.add(curr_node)
+                    found_next_arc = True
                     break
-            if not found: return None
+            if not found_next_arc:
+                logging.error("OR-Tools path reconstruction failed: Path broken.")
+                return None # Path is broken
+        
         return path
+
 
     # --- QUBO Implementation ---
     def find_path_with_qubo(self, start_pos, end_pos, payload_kg):

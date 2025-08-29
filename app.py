@@ -35,7 +35,7 @@ def create_box(building: Building):
 
 st.set_page_config(layout="wide")
 st.title("🚁 Q-DOP: Path Optimization Comparison")
-
+#hi
 # --- Session State ---
 for key, default in [('stage', 'setup'), ('mission_plan', None), ('animation_step', 0),
                      ('is_playing', False), ('log', []), ('orders_df', None), ('weather_df', None)]:
