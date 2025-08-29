@@ -12,3 +12,6 @@ xgboost
 dwave-ocean-sdk  # For D-Wave Samplers & Simulated Annealing
 pyqubo           # For building QUBOs easily
 ortools          # Google's classical optimization suite
+# requirements.txt (add these lines)
+streamlit
+plotly
