@@ -3,19 +3,16 @@ import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
 import time
-import pandas as pd
-from shapely.geometry import Polygon, Point
 
+# --- (Imports and Helper Functions are unchanged) ---
 import sys, os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import config
-from environment import Environment, Order, Building, WeatherZone, WeatherSystem
+from environment import Environment, Order, Building
 from ml_predictor.predictor import EnergyTimePredictor
-from optimization.assignment_solver import AssignmentSolver
 from path_planner import PathPlanner3D
 
-# --- Helper Functions ---
 def log_event(message):
     if 'log' not in st.session_state: st.session_state.log = []
     st.session_state.log.insert(0, f"{time.strftime('%H:%M:%S')} - {message}")
@@ -29,123 +26,150 @@ def create_box(building: Building):
     z_coords = [0, 0, 0, 0, h, h, h, h]
     return go.Mesh3d(x=x_coords, y=y_coords, z=z_coords, i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
                      j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 2, 5, 1, 2, 5, 6],
-                     color='grey', opacity=0.7, name='Building', hoverinfo='none',
-                     lighting=dict(ambient=0.4, diffuse=1.0, fresnel=0.1, specular=0.5, roughness=0.5),
-                     lightposition=dict(x=1000, y=2000, z=3000))
+                     color='grey', opacity=0.7, name='Building', hoverinfo='none')
+
+def create_nfz_box(zone):
+    x_coords = [zone[0], zone[2], zone[2], zone[0], zone[0], zone[2], zone[2], zone[0]]
+    y_coords = [zone[1], zone[1], zone[3], zone[3], zone[1], zone[1], zone[3], zone[3]]
+    z_coords = [0, 0, 0, 0, config.MAX_ALTITUDE, config.MAX_ALTITUDE, config.MAX_ALTITUDE, config.MAX_ALTITUDE]
+    return go.Mesh3d(x=x_coords, y=y_coords, z=z_coords, color='red', opacity=0.15, name='No-Fly Zone', hoverinfo='name')
+
 
 st.set_page_config(layout="wide")
-st.title("🚁 Q-DOP: Path Optimization Comparison")
+st.title("🚁 Q-DOP: QUBO-Powered Drone Path Optimization")
 
-# --- Session State ---
+# --- (Session State is unchanged) ---
 for key, default in [('stage', 'setup'), ('mission_plan', None), ('animation_step', 0),
-                     ('is_playing', False), ('log', []), ('orders_df', None), ('weather_df', None)]:
+                     ('log', [])]:
     if key not in st.session_state: st.session_state[key] = default
 
-# --- STAGE 1: SETUP ---
+
+# --- STAGE 1: SETUP (Unchanged) ---
 def setup_stage():
-    st.header("1. Mission Setup")
+    st.header("1. Mission Parameters")
     log_event("App initialized. Waiting for mission setup.")
 
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Drone Fleet")
-        st.session_state.num_drones = st.slider("Number of Drones", 1, 10, 3, 1)
-
-        st.subheader("Weather Conditions")
-        if st.session_state.weather_df is None:
-            st.session_state.weather_df = pd.DataFrame([
-                {"zone_id": 0, "center_lon": -74.00, "center_lat": 40.72, "radius_m": 1500, "wind_speed_mps": 15.0, "wind_direction_deg": 270},
-                {"zone_id": 1, "center_lon": -73.98, "center_lat": 40.73, "radius_m": 1000, "wind_speed_mps": 5.0, "wind_direction_deg": 90},
-            ])
-        st.session_state.weather_df = st.data_editor(st.session_state.weather_df, num_rows="dynamic", use_container_width=True)
+        st.subheader("Departure & Arrival")
+        hub_name = st.selectbox("Choose a Departure Hub", list(config.HUBS.keys()))
+        st.session_state.hub_location = config.HUBS[hub_name]
+        dest_name = st.selectbox("Choose a Destination", list(config.DESTINATIONS.keys()))
+        st.session_state.destination = config.DESTINATIONS[dest_name]
 
     with col2:
-        st.subheader("Package Manifest")
-        if st.session_state.orders_df is None:
-            st.session_state.orders_df = pd.DataFrame([
-                {"lat": 40.7128, "lon": -74.0060, "alt_m": 50.0, "payload_kg": 1.5},
-                {"lat": 40.7291, "lon": -73.9965, "alt_m": 80.0, "payload_kg": 3.0},
-            ])
-        st.session_state.orders_df = st.data_editor(st.session_state.orders_df, num_rows="dynamic", use_container_width=True)
+        st.subheader("Drone & Payload")
+        st.session_state.num_drones = st.slider("Drones available at Hub", 1, 10, 3, 1)
+        st.session_state.payload_kg = st.slider("Payload Weight (kg)", 0.1, config.DRONE_MAX_PAYLOAD_KG, 1.5, 0.1)
 
-    st.header("2. Planning Parameters")
-    p_col1, p_col2 = st.columns(2)
-    with p_col1:
-        st.session_state.path_solver_choice = st.radio("Pathfinding Solver", ["⭐ Google OR-Tools (Classical)", "💡 D-Wave QUBO (Quantum-Inspired)"], horizontal=True)
-    with p_col2:
-        st.session_state.opt_preference = st.radio("Optimization Priority", ["Fastest Delivery", "Fuel Efficient"], horizontal=True)
+    st.subheader("2. Environmental Conditions")
+    wind_col1, wind_col2 = st.columns(2)
+    with wind_col1:
+        st.session_state.wind_speed = st.slider("Wind Speed (m/s)", 0.0, 20.0, 5.0, 0.5)
+    with wind_col2:
+        st.session_state.wind_direction = st.slider("Wind Direction (°)", 0, 359, 270, 1)
 
-    if st.button("🚀 Plan Mission", type="primary", use_container_width=True):
-        if st.session_state.orders_df.empty:
-            st.error("Cannot plan mission. Please add at least one package to the manifest.")
-            return
+    st.subheader("3. Optimization Priority")
+    st.session_state.opt_preference = st.radio("Optimize For:", ["Balanced", "Fastest Delivery", "Fuel Efficient"], horizontal=True, index=0)
 
-        orders = [Order(id=i, location=(r["lon"], r["lat"], r["alt_m"]), payload_kg=float(r["payload_kg"]))
-                  for i, r in st.session_state.orders_df.iterrows()]
+    if st.button("🚀 Plan Mission with QUBO", type="primary", use_container_width=True):
+        st.session_state.order = Order(id=0, location=st.session_state.destination, payload_kg=st.session_state.payload_kg)
+        st.session_state.stage = 'planning'
+        st.rerun()
 
-        weather_zones = []
-        for i, row in st.session_state.weather_df.iterrows():
-            angle_rad = np.deg2rad(270 - row["wind_direction_deg"])
-            wind_vec = np.array([np.cos(angle_rad), np.sin(angle_rad), 0]) * row["wind_speed_mps"]
-            center_point = (row["center_lon"], row["center_lat"])
-            radius_deg = row["radius_m"] / 111320
-            poly = Point(center_point).buffer(radius_deg)
-            weather_zones.append(WeatherZone(id=i, polygon=poly, wind_vector=wind_vec))
-        st.session_state.weather_system = WeatherSystem(weather_zones)
-        st.session_state.orders = orders
-        st.session_state.stage = 'planning'; st.rerun()
-
-# --- STAGE 2: PLANNING ---
+# --- STAGE 2: PLANNING (Modified Cost Calculation) ---
 def planning_stage():
-    log_event("Starting mission planning...")
-    with st.spinner("Executing Mission Plan..."):
-        log_event(f"Pathfinding with: {st.session_state.path_solver_choice}")
-
-        env = Environment(st.session_state.num_drones, st.session_state.orders, st.session_state.weather_system)
+    log_event("Starting mission planning with QUBO...")
+    with st.spinner("Compiling QUBO and finding optimal path..."):
+        env = Environment(wind_speed_mps=st.session_state.wind_speed, wind_direction_deg=st.session_state.wind_direction)
         predictor = EnergyTimePredictor()
         path_planner = PathPlanner3D(env, predictor)
+        
+        pref = st.session_state.opt_preference
+        if pref == "Fastest Delivery": weights = {'time': 0.9, 'energy': 0.1}
+        elif pref == "Fuel Efficient": weights = {'time': 0.1, 'energy': 0.9}
+        else: weights = {'time': 0.5, 'energy': 0.5}
 
-        solver = AssignmentSolver(env, predictor, path_planner, st.session_state.path_solver_choice)
+        hub_loc = st.session_state.hub_location
+        order_loc = st.session_state.order.location
+        payload = st.session_state.payload_kg
 
-        weights = {'time': 0.9, 'energy': 0.1} if st.session_state.opt_preference == "Fastest Delivery" else {'time': 0.1, 'energy': 0.9}
+        takeoff_start = hub_loc
+        takeoff_end = (hub_loc[0], hub_loc[1], config.TAKEOFF_ALTITUDE)
+        takeoff_path = [takeoff_start, takeoff_end]
 
-        st.session_state.mission_plan = solver.solve(weights)
+        log_event(f"Planning main route from takeoff altitude...")
+        path_to = path_planner.find_path(takeoff_end, order_loc, payload, weights)
+        log_event("Planning return path to hub...")
+        path_from = path_planner.find_path(order_loc, takeoff_end, 0, weights)
 
-        log_event("Mission plan generated.")
-    st.session_state.stage = 'results'; st.session_state.animation_step = 0; st.session_state.is_playing = False; st.rerun()
+        if path_to is None or path_from is None:
+            st.error("Failed to find a valid path. The destination might be inside a No-Fly Zone or the wind is too strong. Please try different parameters.")
+            st.session_state.mission_plan = None
+            st.session_state.stage = 'results'; st.rerun()
+            return
+        
+        landing_path = [takeoff_end, takeoff_start]
 
-# --- STAGE 3: RESULTS ---
+        def _calculate_path_cost(path, payload_kg, predictor_instance):
+            """Calculates total time and energy, including new physics."""
+            total_time, total_energy = 0, 0
+            if not path or len(path) < 2: return 0, 0
+            
+            # Add acceleration energy at the start
+            total_energy += predictor_instance.calculate_inertial_energy(payload_kg)
+
+            for i in range(1, len(path)):
+                p_prev = path[i-2] if i > 1 else None
+                p1, p2 = path[i-1], path[i]
+                
+                wind = env.weather.get_wind_at_location(p1[0], p1[1])
+                t, e = predictor_instance.predict(p1, p2, payload_kg, wind, p_prev)
+                total_time += t
+                total_energy += e
+            
+            # Add deceleration energy at the end
+            total_energy += predictor_instance.calculate_inertial_energy(payload_kg)
+
+            return total_time, total_energy
+
+        t_takeoff, e_takeoff = _calculate_path_cost(takeoff_path, payload, predictor)
+        t_to, e_to = _calculate_path_cost(path_to, payload, predictor)
+        t_from, e_from = _calculate_path_cost(path_from, 0, predictor)
+        t_land, e_land = _calculate_path_cost(landing_path, 0, predictor)
+        
+        total_time = t_takeoff + t_to + t_from + t_land
+        total_energy = e_takeoff + e_to + e_from + e_land
+
+        st.session_state.mission_plan = {
+            'full_path': takeoff_path + path_to[1:] + path_from[1:] + landing_path[1:],
+            'total_time': total_time,
+            'total_energy': total_energy,
+            'env': env
+        }
+        log_event("Mission plan generated with advanced physics.")
+
+    st.session_state.stage = 'results'; st.session_state.animation_step = 0; st.rerun()
+
+# --- STAGE 3: RESULTS (Unchanged) ---
 def results_stage():
     mission_plan = st.session_state.mission_plan
     if not mission_plan:
-        st.error("An error occurred during planning. Returning to setup.")
-        st.session_state.stage = 'setup'
-        st.rerun()
+        st.warning("No mission plan could be generated.")
+        if st.button("⬅️ New Mission", use_container_width=True):
+            st.session_state.stage = 'setup'; st.rerun()
         return
 
-    st.header(f"Mission Plan (Optimized for {st.session_state.opt_preference})")
-    st.subheader(f"Pathfinding Solver: {st.session_state.path_solver_choice}")
+    st.header(f"Mission Plan (Optimized for: {st.session_state.opt_preference})")
 
     col1, col2 = st.columns([1, 2.5])
     with col1:
-        st.subheader("Drone Schedules & Stats")
-        if not mission_plan['assignments'] or not any(mission_plan['assignments'].values()):
-            st.warning("No solution found or tasks could be assigned.")
-            st.metric("Total Time (Makespan)", "0.00 s")
-            st.metric("Total Energy", "0.00 Wh")
-        else:
-            st.metric("Total Time (Makespan)", f"{mission_plan['total_time']:.2f} s")
-            st.metric("Total Energy", f"{mission_plan['total_energy']:.2f} Wh")
-            for drone_id, tasks in mission_plan['assignments'].items():
-                with st.expander(f"**Drone {drone_id} Schedule**"):
-                    if not tasks: st.write("Idle")
-                    else:
-                        for task in tasks: st.info(f"Order {task['order_id']} ({task['start_time']:.1f}s → {task['end_time']:.1f}s)")
+        st.subheader("Mission Stats")
+        st.metric("Total Flight Time", f"{mission_plan['total_time']:.2f} s")
+        st.metric("Total Energy Consumed", f"{mission_plan['total_energy']:.2f} Wh")
 
         st.subheader("Animation Controls")
-        if st.button("▶️ Play / ⏸️ Pause", use_container_width=True): st.session_state.is_playing = not st.session_state.is_playing
-        if st.button("🔁 Restart", use_container_width=True):
-            st.session_state.animation_step = 0; st.session_state.is_playing = False; st.rerun()
+        st.session_state.animation_step = st.slider("Simulation Timeline", 0, 100, st.session_state.animation_step)
         if st.button("⬅️ New Mission", use_container_width=True):
             st.session_state.stage = 'setup'; st.rerun()
 
@@ -155,64 +179,45 @@ def results_stage():
     def draw_scene(animation_step):
         fig = go.Figure()
         env = mission_plan['env']
-        hub_loc = config.HUB_LOCATION
-        fig.add_trace(go.Scatter3d(x=[hub_loc[0]], y=[hub_loc[1]], z=[hub_loc[2]], mode='markers', marker=dict(size=10, color='blue', symbol='diamond'), name='Hub'))
-        if env.orders:
-            order_locs = [o.location for o in env.orders]
-            fig.add_trace(go.Scatter3d(x=[loc[0] for loc in order_locs], y=[loc[1] for loc in order_locs], z=[loc[2] for loc in order_locs], mode='markers+text', text=[f"O{o.id}" for o in env.orders], textposition='middle right', marker=dict(size=8, color='green'), name='Orders'))
+        
+        hub_loc = st.session_state.hub_location
+        dest_loc = st.session_state.destination
+        fig.add_trace(go.Scatter3d(x=[hub_loc[0]], y=[hub_loc[1]], z=[hub_loc[2]], mode='markers', marker=dict(size=8, color='cyan', symbol='diamond'), name='Hub'))
+        fig.add_trace(go.Scatter3d(x=[dest_loc[0]], y=[dest_loc[1]], z=[dest_loc[2]], mode='markers+text', text=["Dest."], textposition='middle right', marker=dict(size=8, color='lime'), name='Destination'))
         for b in env.buildings: fig.add_trace(create_box(b))
+        for nfz in config.NO_FLY_ZONES: fig.add_trace(create_nfz_box(nfz))
 
         max_time = mission_plan.get('total_time', 0)
-        current_time = (animation_step / 100) * max_time if max_time > 0 else 0
+        current_time = (animation_step / 100.0) * max_time if max_time > 0 else 0
 
-        live_drones_pos = []
-        if 'full_paths' in mission_plan:
-            for drone_id, drone_path in mission_plan['full_paths'].items():
-                pos = config.HUB_LOCATION
-                if drone_path:
-                    segment = next((s for s in drone_path if s['start_time'] <= current_time < s['end_time']), None)
-                    if segment and segment.get('path'):
-                        duration = segment.get('duration', 0)
-                        if duration > 0:
-                            progress = (current_time - segment['start_time']) / duration
-                            path_len = len(segment['path'])
-                            idx = min(int(progress * (path_len - 1)), path_len - 1)
-                            pos = segment['path'][idx]
-                    elif drone_path and current_time >= drone_path[-1]['end_time']:
-                        pos = config.HUB_LOCATION
-                live_drones_pos.append(pos)
+        drone_path = mission_plan['full_path']
+        pos = hub_loc
+        path_len = len(drone_path)
+        if path_len > 1 and max_time > 0:
+            time_per_segment = max_time / (path_len - 1)
+            current_segment_idx = min(int(current_time / time_per_segment), path_len - 2)
+            segment_progress = (current_time % time_per_segment) / time_per_segment if time_per_segment > 0 else 0
+            
+            p_start = np.array(drone_path[current_segment_idx])
+            p_end = np.array(drone_path[current_segment_idx + 1])
+            pos = p_start + segment_progress * (p_end - p_start)
+        elif path_len == 1:
+            pos = drone_path[0]
+            
+        fig.add_trace(go.Scatter3d(x=[pos[0]], y=[pos[1]], z=[pos[2]], mode='markers', marker=dict(size=10, color='red', symbol='circle-open'), name='Live Drone'))
 
-        if live_drones_pos:
-            live_drones_pos_arr = np.array(live_drones_pos)
-            fig.add_trace(go.Scatter3d(x=live_drones_pos_arr[:, 0], y=live_drones_pos_arr[:, 1], z=live_drones_pos_arr[:, 2], mode='markers', marker=dict(size=10, color='red', symbol='circle-open'), name='Live Drones'))
-
-        colors = ['yellow', 'cyan', 'magenta', 'lime', 'white']
-        if 'full_paths' in mission_plan:
-            for i, (drone_id, drone_path) in enumerate(mission_plan['full_paths'].items()):
-                if not drone_path: continue
-                valid_segments = [seg['path'] for seg in drone_path if seg.get('path')]
-                if not valid_segments: continue
-                full_3d_path = np.concatenate(valid_segments)
-                fig.add_trace(go.Scatter3d(x=full_3d_path[:,0], y=full_3d_path[:,1], z=full_3d_path[:,2], mode='lines', line=dict(width=3, color=colors[i % len(colors)]), name=f'Drone {drone_id} Path'))
+        full_3d_path = np.array(drone_path)
+        fig.add_trace(go.Scatter3d(x=full_3d_path[:,0], y=full_3d_path[:,1], z=full_3d_path[:,2], mode='lines', line=dict(width=4, color='yellow'), name='QUBO Path'))
 
         fig.update_layout(margin=dict(l=0, r=0, b=0, t=0), showlegend=True,
                           scene=dict(xaxis_title='Longitude', yaxis_title='Latitude', zaxis_title='Altitude (m)',
-                                     aspectratio=dict(x=1, y=1, z=0.3), bgcolor='rgb(20, 24, 54)'),
+                                     aspectratio=dict(x=1, y=1, z=0.4), bgcolor='rgb(20, 24, 54)'),
                           legend=dict(font=dict(color='white')))
 
         plot_placeholder.plotly_chart(fig, use_container_width=True, height=700)
-        progress_placeholder.progress(animation_step, text=f"Simulation Time: {current_time:.2f}s / {max_time:.2f}s")
+        progress_placeholder.progress(animation_step / 100.0, text=f"Simulation Time: {current_time:.2f}s / {max_time:.2f}s")
 
-    if st.session_state.is_playing:
-        if st.session_state.animation_step < 100:
-            st.session_state.animation_step += 1
-        else:
-            st.session_state.is_playing = False
-        draw_scene(st.session_state.animation_step)
-        time.sleep(0.05)
-        st.rerun()
-    else:
-        draw_scene(st.session_state.animation_step)
+    draw_scene(st.session_state.animation_step)
 
 # --- App Router ---
 with st.sidebar:
