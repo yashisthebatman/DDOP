@@ -15,3 +15,4 @@ ortools          # Google's classical optimization suite
 # requirements.txt (add these lines)
 streamlit
 plotly
+opensimplex
