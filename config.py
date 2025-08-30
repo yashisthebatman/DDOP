@@ -36,6 +36,21 @@ DESTINATIONS = {
     "Battery Park": (-74.0170, 40.7033, 50.0)
 }
 
+# --- Waypoints for Offline Heuristic Calculation ---
+# This defines the nodes for the pre-computation phase.
+# Hubs are set to TAKEOFF_ALTITUDE to ensure they are in valid airspace.
+WAYPOINTS = {
+    "Hub A": (HUBS["Hub A (South Manhattan)"][0], HUBS["Hub A (South Manhattan)"][1], TAKEOFF_ALTITUDE),
+    "Hub B": (HUBS["Hub B (Midtown East)"][0], HUBS["Hub B (Midtown East)"][1], TAKEOFF_ALTITUDE),
+    "Hub C": (HUBS["Hub C (West Side)"][0], HUBS["Hub C (West Side)"][1], TAKEOFF_ALTITUDE),
+    "WTC": DESTINATIONS["One World Trade"],
+    "Empire State": DESTINATIONS["Empire State Building"],
+    "Hudson Yards": DESTINATIONS["Hudson Yards Vessel"],
+    "NYU Campus": DESTINATIONS["NYU Campus"],
+    "Chelsea Market": DESTINATIONS["Chelsea Market"],
+    "Battery Park": DESTINATIONS["Battery Park"],
+}
+
 # --- No-Fly Zones [min_lon, min_lat, max_lon, max_lat] ---
 NO_FLY_ZONES = [
     [-74.01, 40.715, -73.995, 40.725],
@@ -43,7 +58,6 @@ NO_FLY_ZONES = [
 ]
 
 # --- Drone & Physics ---
-# FIX: Removed the space in the variable name
 DRONE_SPEED_MPS = 25
 DRONE_MAX_PAYLOAD_KG = 5.0
 DRONE_BATTERY_WH = 20.0
