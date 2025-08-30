@@ -9,21 +9,23 @@ class AssignmentSolver:
         self.predictor = predictor
         self.path_planner = path_planner
         self.path_solver_choice = path_solver_choice
-        self.trip_costs = self._precompute_trip_costs()
+        self.trip_costs = {} # Will be populated by solve()
 
-    def _precompute_trip_costs(self):
+    def _compute_trip_costs(self, weights):
+        """Computes trip costs based on the provided optimization weights."""
         costs = {}
         hub = config.HUB_LOCATION
         for order in self.env.orders:
             logging.info(f"Planning path for order {order.id} with {self.path_solver_choice}...")
-            path_to = self.path_planner.find_path(hub, order.location, order.payload_kg, self.path_solver_choice)
-            path_from = self.path_planner.find_path(order.location, hub, 0, self.path_solver_choice)
-            
+            # Pass the weights down to the path planner
+            path_to = self.path_planner.find_path(hub, order.location, order.payload_kg, self.path_solver_choice, weights)
+            path_from = self.path_planner.find_path(order.location, hub, 0, self.path_solver_choice, weights)
+
             if path_to is None or path_from is None:
                 logging.warning(f"Could not find a complete path for order {order.id} using {self.path_solver_choice}.")
                 costs[order.id] = {'time': float('inf'), 'energy': float('inf'), 'path_to': [], 'path_from': []}
                 continue
-            
+
             time_to, energy_to = self._calculate_path_cost(path_to, order.payload_kg)
             time_from, energy_from = self._calculate_path_cost(path_from, 0)
 
@@ -38,7 +40,7 @@ class AssignmentSolver:
                 'path_to': path_to,
                 'path_from': path_from
             }
-        return costs
+        self.trip_costs = costs
 
     def _calculate_path_cost(self, path, payload_kg):
         total_time, total_energy = 0, 0
@@ -53,20 +55,24 @@ class AssignmentSolver:
         return total_time, total_energy
 
     def solve(self, weights):
+        # Compute costs using the specified weights for this solve() call
+        self._compute_trip_costs(weights)
+
         assignments = {d.id: [] for d in self.env.drones}
         drone_finish_times = {d.id: 0.0 for d in self.env.drones}
-        
+
         # Filter out orders for which no path could be found
         possible_orders = [o for o in self.env.orders if self.trip_costs[o.id]['time'] != float('inf')]
-        
+
         if not possible_orders:
             logging.warning("No orders could be assigned as no valid paths were found for any of them.")
             return self._format_solution(assignments)
 
         def order_cost(order):
             costs = self.trip_costs[order.id]
+            # The assignment cost should also use the same weights
             return weights['time'] * costs['time'] + weights['energy'] * costs['energy']
-            
+
         # Sort the plannable orders by their weighted cost
         sorted_orders = sorted(possible_orders, key=order_cost)
 
@@ -76,7 +82,7 @@ class AssignmentSolver:
             start_time = drone_finish_times[best_drone_id]
             duration = self.trip_costs[order.id]['time']
             end_time = start_time + duration
-            
+
             task = {'order_id': order.id, 'start_time': start_time, 'end_time': end_time, 'duration': duration}
             assignments[best_drone_id].append(task)
             drone_finish_times[best_drone_id] = end_time
@@ -86,7 +92,7 @@ class AssignmentSolver:
     def _format_solution(self, assignments):
         total_energy, max_time = 0, 0
         full_paths = {d.id: [] for d in self.env.drones}
-        
+
         for d_id, tasks in assignments.items():
             tasks.sort(key=lambda t: t['start_time'])
             for task in tasks:
@@ -94,7 +100,7 @@ class AssignmentSolver:
                 costs = self.trip_costs[o_id]
                 total_energy += costs['energy']
                 max_time = max(max_time, task['end_time'])
-                
+
                 if costs['path_to'] and costs['path_from']:
                     combined_path = costs['path_to'] + costs['path_from'][1:]
                 else:

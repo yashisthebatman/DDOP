@@ -35,7 +35,7 @@ def create_box(building: Building):
 
 st.set_page_config(layout="wide")
 st.title("🚁 Q-DOP: Path Optimization Comparison")
-#hi
+
 # --- Session State ---
 for key, default in [('stage', 'setup'), ('mission_plan', None), ('animation_step', 0),
                      ('is_playing', False), ('log', []), ('orders_df', None), ('weather_df', None)]:
@@ -45,7 +45,7 @@ for key, default in [('stage', 'setup'), ('mission_plan', None), ('animation_ste
 def setup_stage():
     st.header("1. Mission Setup")
     log_event("App initialized. Waiting for mission setup.")
-    
+
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Drone Fleet")
@@ -74,7 +74,7 @@ def setup_stage():
         st.session_state.path_solver_choice = st.radio("Pathfinding Solver", ["⭐ Google OR-Tools (Classical)", "💡 D-Wave QUBO (Quantum-Inspired)"], horizontal=True)
     with p_col2:
         st.session_state.opt_preference = st.radio("Optimization Priority", ["Fastest Delivery", "Fuel Efficient"], horizontal=True)
-    
+
     if st.button("🚀 Plan Mission", type="primary", use_container_width=True):
         if st.session_state.orders_df.empty:
             st.error("Cannot plan mission. Please add at least one package to the manifest.")
@@ -82,7 +82,7 @@ def setup_stage():
 
         orders = [Order(id=i, location=(r["lon"], r["lat"], r["alt_m"]), payload_kg=float(r["payload_kg"]))
                   for i, r in st.session_state.orders_df.iterrows()]
-        
+
         weather_zones = []
         for i, row in st.session_state.weather_df.iterrows():
             angle_rad = np.deg2rad(270 - row["wind_direction_deg"])
@@ -100,23 +100,22 @@ def planning_stage():
     log_event("Starting mission planning...")
     with st.spinner("Executing Mission Plan..."):
         log_event(f"Pathfinding with: {st.session_state.path_solver_choice}")
-        
+
         env = Environment(st.session_state.num_drones, st.session_state.orders, st.session_state.weather_system)
         predictor = EnergyTimePredictor()
         path_planner = PathPlanner3D(env, predictor)
-        
+
         solver = AssignmentSolver(env, predictor, path_planner, st.session_state.path_solver_choice)
-        
+
         weights = {'time': 0.9, 'energy': 0.1} if st.session_state.opt_preference == "Fastest Delivery" else {'time': 0.1, 'energy': 0.9}
-        
+
         st.session_state.mission_plan = solver.solve(weights)
-        
+
         log_event("Mission plan generated.")
     st.session_state.stage = 'results'; st.session_state.animation_step = 0; st.session_state.is_playing = False; st.rerun()
 
 # --- STAGE 3: RESULTS ---
 def results_stage():
-    # This entire function is robust and requires no changes.
     mission_plan = st.session_state.mission_plan
     if not mission_plan:
         st.error("An error occurred during planning. Returning to setup.")
@@ -142,7 +141,7 @@ def results_stage():
                     if not tasks: st.write("Idle")
                     else:
                         for task in tasks: st.info(f"Order {task['order_id']} ({task['start_time']:.1f}s → {task['end_time']:.1f}s)")
-        
+
         st.subheader("Animation Controls")
         if st.button("▶️ Play / ⏸️ Pause", use_container_width=True): st.session_state.is_playing = not st.session_state.is_playing
         if st.button("🔁 Restart", use_container_width=True):
@@ -162,10 +161,10 @@ def results_stage():
             order_locs = [o.location for o in env.orders]
             fig.add_trace(go.Scatter3d(x=[loc[0] for loc in order_locs], y=[loc[1] for loc in order_locs], z=[loc[2] for loc in order_locs], mode='markers+text', text=[f"O{o.id}" for o in env.orders], textposition='middle right', marker=dict(size=8, color='green'), name='Orders'))
         for b in env.buildings: fig.add_trace(create_box(b))
-        
+
         max_time = mission_plan.get('total_time', 0)
         current_time = (animation_step / 100) * max_time if max_time > 0 else 0
-        
+
         live_drones_pos = []
         if 'full_paths' in mission_plan:
             for drone_id, drone_path in mission_plan['full_paths'].items():
@@ -182,7 +181,7 @@ def results_stage():
                     elif drone_path and current_time >= drone_path[-1]['end_time']:
                         pos = config.HUB_LOCATION
                 live_drones_pos.append(pos)
-        
+
         if live_drones_pos:
             live_drones_pos_arr = np.array(live_drones_pos)
             fig.add_trace(go.Scatter3d(x=live_drones_pos_arr[:, 0], y=live_drones_pos_arr[:, 1], z=live_drones_pos_arr[:, 2], mode='markers', marker=dict(size=10, color='red', symbol='circle-open'), name='Live Drones'))
@@ -200,10 +199,10 @@ def results_stage():
                           scene=dict(xaxis_title='Longitude', yaxis_title='Latitude', zaxis_title='Altitude (m)',
                                      aspectratio=dict(x=1, y=1, z=0.3), bgcolor='rgb(20, 24, 54)'),
                           legend=dict(font=dict(color='white')))
-        
+
         plot_placeholder.plotly_chart(fig, use_container_width=True, height=700)
         progress_placeholder.progress(animation_step, text=f"Simulation Time: {current_time:.2f}s / {max_time:.2f}s")
-    
+
     if st.session_state.is_playing:
         if st.session_state.animation_step < 100:
             st.session_state.animation_step += 1
