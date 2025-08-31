@@ -28,27 +28,7 @@ DESTINATIONS = {
     "Madison Square Garden": (-73.9936, 40.7505, 70.0),
     "StuyTown Apartments": (-73.9780, 40.7320, 80.0),
     "Chelsea Market": (-74.0060, 40.7423, 50.0),
-    "Union Square": (-73.9904, 40.7359, 50.0),
-    "Google Building": (-74.0030, 40.7400, 150.0),
-    "New Museum": (-73.9928, 40.7223, 60.0),
-    "Pier 40": (-74.0118, 40.7288, 50.0),
-    "City Hall": (-74.0064, 40.7128, 55.0),
-    "Battery Park": (-74.0170, 40.7033, 50.0)
-}
-
-# --- Waypoints for Offline Heuristic Calculation ---
-# This defines the nodes for the pre-computation phase.
-# Hubs are set to TAKEOFF_ALTITUDE to ensure they are in valid airspace.
-WAYPOINTS = {
-    "Hub A": (HUBS["Hub A (South Manhattan)"][0], HUBS["Hub A (South Manhattan)"][1], TAKEOFF_ALTITUDE),
-    "Hub B": (HUBS["Hub B (Midtown East)"][0], HUBS["Hub B (Midtown East)"][1], TAKEOFF_ALTITUDE),
-    "Hub C": (HUBS["Hub C (West Side)"][0], HUBS["Hub C (West Side)"][1], TAKEOFF_ALTITUDE),
-    "WTC": DESTINATIONS["One World Trade"],
-    "Empire State": DESTINATIONS["Empire State Building"],
-    "Hudson Yards": DESTINATIONS["Hudson Yards Vessel"],
-    "NYU Campus": DESTINATIONS["NYU Campus"],
-    "Chelsea Market": DESTINATIONS["Chelsea Market"],
-    "Battery Park": DESTINATIONS["Battery Park"],
+    "Union Square": (-73.9904, 40.7359, 50.0)
 }
 
 # --- No-Fly Zones [min_lon, min_lat, max_lon, max_lat] ---
@@ -62,7 +42,13 @@ DRONE_SPEED_MPS = 25
 DRONE_MAX_PAYLOAD_KG = 5.0
 DRONE_BATTERY_WH = 20.0
 DRONE_MASS_KG = 2.0
+ASCENT_EFFICIENCY = 0.7 # How much more energy it takes to go up vs. glide down
+GRAVITY = 9.81
 
 # --- Advanced Physics Constants ---
-ACCELERATION_ENERGY_BASE_WH = (0.5 * 1.0 * DRONE_SPEED_MPS**2) / 3600
 TURN_ENERGY_FACTOR = 0.005
+
+# --- Pathfinding ---
+# The "greediness" of the A* algorithm. 1.0 is optimal (standard A*).
+# > 1.0 is faster but may not find the absolute best path. 1.2-1.5 is a good balance.
+A_STAR_HEURISTIC_WEIGHT = 1.2

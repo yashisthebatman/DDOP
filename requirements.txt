@@ -8,11 +8,10 @@ shapely  # For geometric operations (no-fly zones)
 scikit-learn
 xgboost
 
-# Quantum & Classical Optimization
-dwave-ocean-sdk  # For D-Wave Samplers & Simulated Annealing
-pyqubo           # For building QUBOs easily
-ortools          # Google's classical optimization suite
-# requirements.txt (add these lines)
+# Classical Optimization
+ortools # Google's classical optimization suite
+
+# UI & Visualization
 streamlit
 plotly
 opensimplex
