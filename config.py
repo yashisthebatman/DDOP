@@ -8,7 +8,7 @@ MAX_ALTITUDE = 600
 TAKEOFF_ALTITUDE = 50
 
 # --- Strategic Planning Constant ---
-DEFAULT_CRUISING_ALTITUDE = 150 # meters
+DEFAULT_CRUISING_ALTITUDE = 400 # meters
 
 # --- Hub Locations ---
 HUBS = {
