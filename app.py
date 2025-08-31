@@ -46,7 +46,7 @@ def create_nfz_box(zone):
     return go.Mesh3d(x=x_coords, y=y_coords, z=z_coords, color='red', opacity=0.15, name='No-Fly Zone', hoverinfo='name')
 
 st.set_page_config(layout="wide")
-st.title("🚁 Q-DOP: Real-time Path Optimization with Pre-Computed Heuristics")
+st.title("🚁 Q-DOP: Hybrid A*+QUBO Path Optimization Platform")
 
 def setup_stage():
     st.header("1. Mission Parameters")
@@ -67,6 +67,15 @@ def setup_stage():
 
     st.subheader("3. Optimization Priority")
     st.session_state.opt_preference = st.radio("Optimize For:", ["Balanced", "Fastest Delivery", "Fuel Efficient"], horizontal=True, index=0)
+    
+    st.subheader("4. Path Planning Algorithm")
+    st.session_state.planning_method = st.radio(
+        "Choose Planning Method:", 
+        ["Hybrid A*+QUBO (Recommended)", "Classical A* with Heuristics", "Pure A* Baseline"],
+        horizontal=False, 
+        index=0,
+        help="Hybrid A*+QUBO uses quantum-inspired optimization for best results"
+    )
     
     if st.button("🚀 Plan Mission", type="primary", use_container_width=True):
         st.session_state.order = Order(id=0, location=st.session_state.destination, payload_kg=st.session_state.payload_kg)
@@ -89,8 +98,20 @@ def planning_stage():
         hub_loc, order_loc, payload = st.session_state.hub_location, st.session_state.order.location, st.session_state.payload_kg
         takeoff_end = (hub_loc[0], hub_loc[1], config.TAKEOFF_ALTITUDE)
         
-        path_to, status_to = planner.find_path_realtime(takeoff_end, order_loc, payload, weights)
-        path_from, status_from = planner.find_path_realtime(order_loc, takeoff_end, 0, weights)
+        # Choose planning method based on user selection
+        planning_method = st.session_state.get('planning_method', 'Hybrid A*+QUBO (Recommended)')
+        
+        if planning_method == "Hybrid A*+QUBO (Recommended)":
+            path_to, status_to = planner.find_hybrid_qubo_path(takeoff_end, order_loc, payload, weights, use_qubo=True)
+            path_from, status_from = planner.find_hybrid_qubo_path(order_loc, takeoff_end, 0, weights, use_qubo=True)
+        elif planning_method == "Classical A* with Heuristics":
+            path_to, status_to = planner.find_path_realtime(takeoff_end, order_loc, payload, weights)
+            path_from, status_from = planner.find_path_realtime(order_loc, takeoff_end, 0, weights)
+        else:  # Pure A* Baseline
+            path_to = planner.find_baseline_path(takeoff_end, order_loc, payload, weights)
+            path_from = planner.find_baseline_path(order_loc, takeoff_end, 0, weights)
+            status_to = "Pure A* Baseline" if path_to else "A* Failed"
+            status_from = "Pure A* Baseline" if path_from else "A* Failed"
 
         if path_to is None or path_from is None:
             st.error(f"Fatal Error: Path planning failed. Status: {status_to or status_from}.");

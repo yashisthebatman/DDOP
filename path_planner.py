@@ -10,6 +10,7 @@ import pickle
 from config import AREA_BOUNDS, MAX_ALTITUDE, MIN_ALTITUDE, WAYPOINTS
 from utils.heuristics import a_star_search
 from utils.geometry import calculate_distance_3d
+from optimization.qubo_solver import HybridPathPlanner
 # -----------------------------------------------------------
 
 
@@ -25,6 +26,12 @@ class PathPlanner3D:
         self.grid = self._create_and_populate_grid()
         self.node_map, self.reverse_node_map = self._create_node_maps()
         self.moves = [(dx, dy, dz) for dx in [-1, 0, 1] for dy in [-1, 0, 1] for dz in [-1, 0, 1] if not (dx == 0 and dy == 0 and dz == 0)]
+        
+        # Initialize hybrid A*+QUBO planner
+        self.hybrid_planner = HybridPathPlanner(
+            self.grid, self.moves, self.predictor, self.env, 
+            world_converter=self._grid_to_world
+        )
         
         try:
             with open("quantum_heuristic.pkl", "rb") as f:
@@ -155,3 +162,34 @@ class PathPlanner3D:
 
         if not path_coords: return None, "Error: A* failed to find a valid path"
         return [self._grid_to_world(c) for c in path_coords], "Real-time Optimal (Heuristic Guided)"
+
+    def find_hybrid_qubo_path(self, start_pos, end_pos, payload_kg, weights, use_qubo=True):
+        """
+        Find optimal path using hybrid A*+QUBO approach.
+        This is the main method that implements the requested hybrid functionality.
+        """
+        start_coord_raw = self._world_to_grid(start_pos)
+        end_coord_raw = self._world_to_grid(end_pos)
+        start_coord = self._find_nearest_valid_node(start_coord_raw)
+        end_coord = self._find_nearest_valid_node(end_coord_raw)
+        
+        if not start_coord or not end_coord:
+            return None, "Error: Start or End point is in an invalid area."
+        
+        if start_coord == end_coord:
+            return [self._grid_to_world(start_coord)], "Single Point Path"
+        
+        # Use hybrid A*+QUBO planner
+        path_coords = self.hybrid_planner.find_optimal_path(
+            start_coord, end_coord, payload_kg, weights, use_qubo=use_qubo
+        )
+        
+        if not path_coords:
+            return None, "Error: Hybrid planner failed to find a valid path"
+        
+        world_path = [self._grid_to_world(c) for c in path_coords]
+        
+        if use_qubo:
+            return world_path, "Hybrid A*+QUBO Optimized"
+        else:
+            return world_path, "A* Baseline"
