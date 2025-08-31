@@ -1,6 +1,3 @@
-# ==============================================================================
-# path_planner.py
-# ==============================================================================
 import numpy as np
 import logging
 import pickle
@@ -20,7 +17,8 @@ class PathPlanner3D:
         
         self.env = env
         self.predictor = predictor
-        self.resolution = 5
+        # --- PERFORMANCE OPTIMIZATION: Increased resolution to reduce grid size by 8x ---
+        self.resolution = 10 # Was 5. This is a major speed and memory improvement.
         self.grid_shape, self.origin_lon, self.origin_lat = self._get_grid_params()
         self.grid = self._create_and_populate_grid()
         self.node_map, self.reverse_node_map = self._create_node_maps()
@@ -29,8 +27,8 @@ class PathPlanner3D:
         try:
             with open("quantum_heuristic.pkl", "rb") as f:
                 self.heuristic_lookup_table = pickle.load(f)
-            self.waypoints_grid = {name: self._world_to_grid(pos) for name, pos in WAYPOINTS.items()}
-            self.waypoint_names = list(self.waypoints_grid.keys())
+            self.waypoints_world = WAYPOINTS
+            self.waypoint_names = list(self.waypoints_world.keys())
             logging.info("Successfully loaded pre-computed 'quantum_heuristic.pkl'. Planner is in ONLINE mode.")
         except FileNotFoundError:
             logging.warning("Heuristic file 'quantum_heuristic.pkl' not found. Planner is in OFFLINE mode (for generation only).")
@@ -66,39 +64,26 @@ class PathPlanner3D:
         while q:
             curr = q.pop(0)
             for move in self.moves:
-                # --- FINAL FIX: Use pure Python math to avoid creating numpy integers ---
                 neighbor = (curr[0] + move[0], curr[1] + move[1], curr[2] + move[2])
-                # -------------------------------------------------------------------------
                 if not (0 <= neighbor[0] < self.grid_shape[0] and 0 <= neighbor[1] < self.grid_shape[1] and 0 <= neighbor[2] < self.grid_shape[2]): continue
                 if neighbor in self.node_map: return neighbor
                 if neighbor not in visited: visited.add(neighbor); q.append(neighbor)
         return None
         
     def _world_to_grid(self, pos):
-        """Converts world coordinates to grid coordinates."""
         x_m = (pos[0] - self.origin_lon) * 111000 * np.cos(np.radians(self.origin_lat))
         y_m = (pos[1] - self.origin_lat) * 111000
-        
-        grid_pos_np = np.array([
-            x_m / self.resolution,
-            y_m / self.resolution,
-            pos[2] / self.resolution
-        ], dtype=np.int64)
-        
+        grid_pos_np = np.array([x_m / self.resolution, y_m / self.resolution, pos[2] / self.resolution], dtype=np.int64)
         clipped_pos = np.clip(grid_pos_np, 0, np.array(self.grid_shape) - 1)
-        
-        # This fix remains correct and necessary
         return tuple(map(int, clipped_pos))
 
-    # --- (The rest of the file is unchanged and correct) ---
     def _grid_to_world(self, grid_pos):
         x_m, y_m, z_m = grid_pos[0] * self.resolution, grid_pos[1] * self.resolution, grid_pos[2] * self.resolution
         lon = self.origin_lon + x_m / (111000 * np.cos(np.radians(self.origin_lat))); lat = self.origin_lat + y_m / 111000
         return (lon, lat, z_m)
 
     def _calculate_path_cost(self, world_path, payload_kg, weights, use_zero_wind=False):
-        if not world_path or len(world_path) < 2:
-            return 0.0
+        if not world_path or len(world_path) < 2: return 0.0
         total_time, total_energy = 0, 0
         for i in range(len(world_path) - 1):
             p1, p2 = world_path[i], world_path[i+1]
@@ -108,50 +93,60 @@ class PathPlanner3D:
             total_time += t; total_energy += e
         return weights['time'] * total_time + weights['energy'] * total_energy
 
-    def find_baseline_path(self, start_pos, end_pos, payload_kg, weights):
-        start_coord_raw = self._world_to_grid(start_pos); end_coord_raw = self._world_to_grid(end_pos)
-        start_coord = self._find_nearest_valid_node(start_coord_raw); end_coord = self._find_nearest_valid_node(end_coord_raw)
+    def find_baseline_path(self, start_pos, end_pos):
+        start_coord = self._find_nearest_valid_node(self._world_to_grid(start_pos))
+        end_coord = self._find_nearest_valid_node(self._world_to_grid(end_pos))
         
         if not start_coord or not end_coord: 
             logging.error(f"Could not find valid nodes for path from {start_pos} to {end_pos}")
             return None
-            
-        if start_coord == end_coord: 
-            return [self._grid_to_world(start_coord)] 
-            
-        path_coords = a_star_search(start_coord, end_coord, self.grid, self.moves)
+        
+        # --- PERFORMANCE OPTIMIZATION: Use a simple, fast heuristic for baseline calculation ---
+        def simple_heuristic(a, b):
+            return np.linalg.norm(np.array(a) - np.array(b))
+
+        path_coords = a_star_search(start_coord, end_coord, self.grid, self.moves, heuristic_func=simple_heuristic)
         
         if not path_coords:
             logging.warning(f"A* failed to find a path between {start_coord} and {end_coord}")
             return None
-            
         return [self._grid_to_world(c) for c in path_coords]
 
-    def _calculate_wind_impact_on_path(self, path, payload_kg, weights):
-        cost_with_wind = self._calculate_path_cost(path, payload_kg, weights, use_zero_wind=False)
-        cost_no_wind = self._calculate_path_cost(path, payload_kg, weights, use_zero_wind=True)
-        return cost_with_wind - cost_no_wind if cost_with_wind != float('inf') else float('inf')
-
-    def _find_closest_waypoint_name(self, grid_coord):
-        return min(self.waypoint_names, key=lambda name: np.linalg.norm(np.array(self.waypoints_grid[name]) - np.array(grid_coord)))
+    def _find_closest_waypoint_name(self, world_pos):
+        return min(self.waypoint_names, key=lambda name: calculate_distance_3d(self.waypoints_world[name], world_pos))
 
     def find_path_realtime(self, start_pos, end_pos, payload_kg, weights):
         if self.heuristic_lookup_table is None:
-            logging.error("Cannot find path: Heuristic table not loaded.")
             return None, "Error: Heuristic table not loaded."
-        start_coord_raw = self._world_to_grid(start_pos); end_coord_raw = self._world_to_grid(end_pos)
-        start_coord = self._find_nearest_valid_node(start_coord_raw); end_coord = self._find_nearest_valid_node(end_coord_raw)
-        if not start_coord or not end_coord: return None, "Error: Start or End point is in an invalid area."
-        def dynamic_heuristic(current_grid_pos, end_grid_pos):
-            start_wp_name = self._find_closest_waypoint_name(current_grid_pos)
-            end_wp_name = self._find_closest_waypoint_name(end_grid_pos)
-            if start_wp_name in self.heuristic_lookup_table and end_wp_name in self.heuristic_lookup_table[start_wp_name]:
-                baseline_cost, baseline_path = self.heuristic_lookup_table[start_wp_name][end_wp_name]
-                wind_correction = self._calculate_wind_impact_on_path(baseline_path, payload_kg, weights)
-                return baseline_cost + wind_correction
-            return calculate_distance_3d(self._grid_to_world(current_grid_pos), self._grid_to_world(end_grid_pos))
-        
-        path_coords = a_star_search(start_coord, end_coord, self.grid, self.moves, heuristic_func=dynamic_heuristic)
 
-        if not path_coords: return None, "Error: A* failed to find a valid path"
-        return [self._grid_to_world(c) for c in path_coords], "Real-time Optimal (Heuristic Guided)"
+        # 1. Identify the strategic mission from the pre-computed table
+        start_wp_name = self._find_closest_waypoint_name(start_pos)
+        end_wp_name = self._find_closest_waypoint_name(end_pos)
+
+        if start_wp_name not in self.heuristic_lookup_table or end_wp_name not in self.heuristic_lookup_table[start_wp_name]:
+            logging.warning(f"No strategic route from {start_wp_name} to {end_wp_name} in heuristic table. Falling back to simple A*.")
+            path = self.find_baseline_path(start_pos, end_pos)
+            return (path, "Fallback: Simple A*") if path else (None, "Error: Fallback A* failed.")
+        
+        # 2. Retrieve the QUBO-optimized sequence of waypoints
+        strategic_route = self.heuristic_lookup_table[start_wp_name][end_wp_name]
+        sequence = strategic_route['sequence']
+        
+        # Create the full list of points for our tactical planner to follow
+        tactical_points = [start_pos] + [self.waypoints_world[wp] for wp in sequence[1:-1]] + [end_pos]
+        
+        # 3. Execute fast, tactical A* for each leg of the strategic journey
+        full_realtime_path = []
+        for i in range(len(tactical_points) - 1):
+            p1, p2 = tactical_points[i], tactical_points[i+1]
+            
+            # The A* search for each leg is short and fast
+            path_segment = self.find_baseline_path(p1, p2)
+            
+            if not path_segment:
+                return None, f"Error: Real-time A* failed on leg {sequence[i]}->{sequence[i+1]}"
+            
+            # Stitch the path together, avoiding duplicate points
+            full_realtime_path.extend(path_segment if i == 0 else path_segment[1:])
+
+        return full_realtime_path, "Optimal (QUBO Strategic + A* Tactical)"

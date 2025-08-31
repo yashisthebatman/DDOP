@@ -74,7 +74,7 @@ def setup_stage():
 
 def planning_stage():
     log_event("Starting real-time mission planning...")
-    with st.spinner("Running fast A* search with dynamic heuristic..."):
+    with st.spinner("Running fast tactical A* search guided by QUBO-optimized strategic route..."):
         if planner is None:
             st.error("Path Planner could not be loaded. Aborting mission."); return
 
@@ -107,7 +107,16 @@ def planning_stage():
             total_time += t; total_energy += e
             mission_log.append({"Segment": f"Leg {i}", "Time (s)": f"{t:.2f}", "Energy (Wh)": f"{e:.3f}", "Payload (kg)": current_payload, "Altitude (m)": f"{p2[2]:.1f}", "Distance (m)": f"{calculate_distance_3d(p1, p2):.1f}"})
 
-        st.session_state.mission_plan = {'full_path': full_path, 'total_time': total_time, 'total_energy': total_energy, 'env': planner.env, 'mission_log': mission_log, 'solver_status': status_to}
+        st.session_state.mission_plan = {
+            'full_path': full_path, 'total_time': total_time, 'total_energy': total_energy, 
+            'env': planner.env, 'mission_log': mission_log, 'solver_status': status_to
+        }
+        
+        # --- OPTIMIZATION: Pre-compute animation data ---
+        drone_path_np = np.array(st.session_state.mission_plan['full_path'])
+        path_distances = np.linalg.norm(np.diff(drone_path_np, axis=0), axis=1)
+        st.session_state.mission_plan['cumulative_dist'] = np.insert(np.cumsum(path_distances), 0, 0)
+        
         log_event("Mission plan generated successfully.")
     st.session_state.stage = 'results'; st.session_state.animation_step = 0; st.rerun()
 
@@ -119,13 +128,20 @@ def results_stage():
         return
 
     st.header(f"Mission Plan (Optimized for: {st.session_state.opt_preference})")
-    st.success(f"✅ Solver Status: {mission_plan['solver_status']}")
+    
+    # --- NEW: Battery Constraint Check ---
+    is_feasible = mission_plan['total_energy'] < config.DRONE_BATTERY_WH
+    if is_feasible:
+        st.success(f"✅ Solver Status: {mission_plan['solver_status']}")
+    else:
+        st.error(f"❌ INFEASIBLE: Mission exceeds battery capacity! ({mission_plan['total_energy']:.2f} Wh > {config.DRONE_BATTERY_WH} Wh)")
+
 
     col1, col2 = st.columns([1, 2.5])
     with col1:
         st.subheader("Mission Stats")
         st.metric("Total Flight Time", f"{mission_plan['total_time']:.2f} s")
-        st.metric("Total Energy Consumed", f"{mission_plan['total_energy']:.2f} Wh")
+        st.metric("Total Energy Consumed", f"{mission_plan['total_energy']:.2f} Wh", delta=f"{config.DRONE_BATTERY_WH} Wh Capacity", delta_color="inverse")
         st.subheader("Animation Controls")
         st.session_state.animation_step = st.slider("Simulation Timeline", 0, 100, st.session_state.animation_step)
         if st.button("⬅️ New Mission", use_container_width=True): st.session_state.stage = 'setup'; st.rerun()
@@ -143,16 +159,16 @@ def results_stage():
         drone_path = np.array(mission_plan['full_path'])
         fig.add_trace(go.Scatter3d(x=drone_path[:,0], y=drone_path[:,1], z=drone_path[:,2], mode='lines', line=dict(width=4, color='yellow'), name='Optimal Path'))
         
-        path_distances = np.linalg.norm(np.diff(drone_path, axis=0), axis=1)
-        cumulative_dist = np.insert(np.cumsum(path_distances), 0, 0)
+        # --- OPTIMIZATION: Use pre-computed animation data ---
+        cumulative_dist = mission_plan['cumulative_dist']
         total_dist = cumulative_dist[-1]
         target_dist = (st.session_state.animation_step / 100.0) * total_dist
         
         idx = np.searchsorted(cumulative_dist, target_dist) - 1
         pos = drone_path[-1] if st.session_state.animation_step == 100 else drone_path[0]
-        if 0 <= idx < len(path_distances):
+        if 0 <= idx < len(cumulative_dist) - 1:
             p_start, p_end = drone_path[idx], drone_path[idx+1]
-            segment_len = path_distances[idx]
+            segment_len = cumulative_dist[idx+1] - cumulative_dist[idx]
             progress = (target_dist - cumulative_dist[idx]) / segment_len if segment_len > 0 else 0
             pos = p_start + progress * (p_end - p_start)
 
