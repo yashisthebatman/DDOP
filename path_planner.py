@@ -4,7 +4,7 @@ from typing import Tuple, List, Optional
 
 import config
 from environment import Environment
-from ml_predictor import EnergyTimePredictor
+from ml_predictor.predictor import EnergyTimePredictor
 from utils.a_star import a_star_search
 from utils.heuristics import TimeHeuristic, EnergyHeuristic, BalancedHeuristic
 

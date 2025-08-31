@@ -10,7 +10,7 @@ from typing import Dict, Any
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import config
-from environment import Environment, Building
+from environment import Environment, Building, WeatherSystem
 from ml_predictor.predictor import EnergyTimePredictor
 from path_planner import PathPlanner3D
 from utils.geometry import calculate_distance_3d
@@ -20,7 +20,7 @@ from utils.geometry import calculate_distance_3d
 def load_planner() -> PathPlanner3D:
     """Cached function to load the planner once and reuse it."""
     log_event("Loading planner and environment grid...")
-    initial_weather = Environment.WeatherSystem(scale=150.0, max_speed=10.0)
+    initial_weather = WeatherSystem(scale=150.0, max_speed=10.0)
     env = Environment(weather_system=initial_weather)
     predictor = EnergyTimePredictor()
     planner = PathPlanner3D(env, predictor)
