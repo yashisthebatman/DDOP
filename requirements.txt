@@ -2,16 +2,21 @@
 numpy
 pandas
 scipy
-shapely  # For geometric operations (no-fly zones)
+shapely
 
 # Machine Learning
 scikit-learn
 xgboost
+joblib
 
 # Classical Optimization
-ortools # Google's classical optimization suite
+ortools
+
+# Performance
+numba # For JIT compilation
 
 # UI & Visualization
 streamlit
 plotly
 opensimplex
+tqdm

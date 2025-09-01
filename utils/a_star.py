@@ -1,32 +1,30 @@
+# utils/a_star.py
 import heapq
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Callable
 
 # Type Aliases for clarity
 GridCoord = Tuple[int, int, int]
 Heuristic = 'Heuristic' # Forward declaration for type hinting
 
-def a_star_search(start: GridCoord, end: GridCoord, grid: np.ndarray, moves: List[GridCoord], heuristic: Heuristic) -> Optional[List[GridCoord]]:
+def a_star_search(
+    start: GridCoord, 
+    end: GridCoord, 
+    grid: np.ndarray, 
+    moves: List[GridCoord], 
+    heuristic: Heuristic or Callable
+) -> Optional[List[GridCoord]]:
     """
-    A generic and fast A* search algorithm.
-
-    This function is domain-agnostic. It only knows how to search a grid based
-    on a provided heuristic. The "intelligence" comes from the heuristic object.
-
-    Args:
-        start: The starting coordinate on the grid.
-        end: The target coordinate on the grid.
-        grid: The 3D numpy array representing the environment (0=free, 1=obstacle).
-        moves: A list of possible moves (e.g., all 26 directions in 3D).
-        heuristic: An instantiated heuristic object with a `calculate(node, goal)` method.
-
-    Returns:
-        A list of grid coordinates representing the path, or None if no path is found.
+    A generic A* search algorithm. Now expects the heuristic object to also provide
+    the move cost, making the search metric-aware (time, energy, etc.).
+    For simple cases (like the coarse search), a basic lambda function can be used.
     """
     open_set = [(0, start)]  # (f_score, node)
     came_from = {}
     g_score = {start: 0}
     open_set_hash = {start}
+    
+    is_heuristic_object = hasattr(heuristic, 'calculate')
 
     while open_set:
         _, current = heapq.heappop(open_set)
@@ -49,16 +47,26 @@ def a_star_search(start: GridCoord, end: GridCoord, grid: np.ndarray, moves: Lis
                 continue
             if grid[neighbor] == 1: continue
 
-            # g_score is the simple, fast geometric distance.
-            move_cost = np.linalg.norm(move)
+            # If we have a full heuristic object, use it to get the true cost of the move.
+            # Otherwise, use simple geometric distance (for the coarse search).
+            if is_heuristic_object:
+                p_prev = came_from.get(current)
+                move_cost = heuristic.cost_between(current, neighbor, p_prev)
+            else: # Simple Euclidean distance for coarse search
+                move_cost = np.linalg.norm(move)
+
             tentative_g_score = g_score.get(current, float('inf')) + move_cost
             
             if tentative_g_score < g_score.get(neighbor, float('inf')):
                 came_from[neighbor] = current
                 g_score[neighbor] = tentative_g_score
                 
-                # The heuristic provides the intelligent, physics-aware estimate.
-                h_score = heuristic.calculate(neighbor)
+                # The heuristic provides the intelligent, physics-aware estimate to the goal.
+                if is_heuristic_object:
+                    h_score = heuristic.calculate(neighbor)
+                else: # Simple Euclidean distance heuristic for coarse search
+                    h_score = heuristic(neighbor, end)
+
                 f_score = tentative_g_score + h_score
                 
                 if neighbor not in open_set_hash:
