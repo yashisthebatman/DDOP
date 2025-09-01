@@ -1,15 +1,16 @@
-# config.py (Full, Corrected, and Completed)
+# config.py (Complete and Corrected)
 """Central configuration file for the Q-DOP project."""
 
 # --- Simulation Environment ---
-AREA_BOUNDS = [-74.02, 40.70, -73.97, 40.74] # [lon_min, lat_min, lon_max, lat_max]
-MIN_ALTITUDE = 10.0 # meters
-MAX_ALTITUDE = 200.0 # meters
-TAKEOFF_ALTITUDE = 15.0 # meters
-GRID_RESOLUTION = 0.0001 # in degrees, approx 11 meters
+AREA_BOUNDS = [-74.02, 40.70, -73.97, 40.74]  # [lon_min, lat_min, lon_max, lat_max]
+MIN_ALTITUDE = 10.0  # meters
+MAX_ALTITUDE = 200.0  # meters
+TAKEOFF_ALTITUDE = 15.0  # meters
+GRID_RESOLUTION = 0.0001  # in degrees, approx 11 meters
 
-# --- Strategic Planning Constant ---
-DEFAULT_CRUISING_ALTITUDE = 100.0 # meters
+# --- Strategic Planning Constants ---
+DEFAULT_CRUISING_ALTITUDE = 100.0  # meters
+DEFAULT_CELL_COST = 1.0
 
 # --- Hub Locations & Destinations ---
 HUBS = {
@@ -17,9 +18,10 @@ HUBS = {
     "Hub B (Midtown East)": (-73.975, 40.740, 10.0),
     "Hub C (West Side)": (-74.005, 40.735, 10.0)
 }
+
 DESTINATIONS = {
-    "One World Trade": (-74.0134, 40.7127, 150.0),
-    "Empire State Building": (-73.9857, 40.7484, 150.0),
+    "One World Trade": (-74.0134, 40.7127, 400.0),
+    "Empire State Building": (-73.9857, 40.7484, 381.0),
     "NYU Campus": (-73.9962, 40.7295, 50.0),
     "Hudson Yards Vessel": (-74.0025, 40.7538, 50.0),
     "South Street Seaport": (-74.0036, 40.706, 50.0),
@@ -43,10 +45,9 @@ DRONE_BATTERY_WH = 200.0
 DRONE_MASS_KG = 2.0
 ASCENT_EFFICIENCY = 0.7
 GRAVITY = 9.81
-TURN_ENERGY_FACTOR = 0.005 # Energy cost per degree of turn
+TURN_ENERGY_FACTOR = 0.005  # Energy cost per degree of turn
 
-# --- Pathfinding ---
-# The "greediness" of the algorithm. 1.0 is optimal. > 1.0 is faster but less optimal.
-A_STAR_HEURISTIC_WEIGHT = 1.2
-# --- NEW: Safety limit for JPS recursion to prevent stack overflow ---
-MAX_PATH_LENGTH = 5000 # A safe upper limit on path grid steps
+# --- Pathfinding Parameters ---
+A_STAR_HEURISTIC_WEIGHT = 1.2  # Heuristic weight (1.0 = optimal, >1.0 = faster but suboptimal)
+MAX_PATH_LENGTH = 5000  # Safety limit for JPS recursion
+PRECOMPUTE_WIND_COSTS = True
