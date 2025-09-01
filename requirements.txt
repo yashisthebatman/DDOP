@@ -20,3 +20,5 @@ streamlit
 plotly
 opensimplex
 tqdm
+
+rtree

@@ -1,14 +1,13 @@
-# utils/d_star_lite.py
 import heapq
 import numpy as np
 from collections import defaultdict
-from itertools import product  # <-- ADD THIS LINE
+from itertools import product
 
 class DStarLite:
     def __init__(self, start, goal, cost_map, heuristic):
         self.start = start
         self.goal = goal
-        self.cost_map = cost_map
+        self.cost_map = cost_map # Now expects the sparse cost map from planner
         self.heuristic = heuristic
 
         self.g_score = defaultdict(lambda: float('inf'))
@@ -40,7 +39,12 @@ class DStarLite:
             self.rhs_score[node] = min_rhs
 
         if node in self.open_set_map:
+            # More efficient way to handle removal from heap is to mark as invalid
+            # but for simplicity, we do a slower explicit check.
+            self.open_set = [(k, n) for k, n in self.open_set if n != node]
+            heapq.heapify(self.open_set)
             del self.open_set_map[node]
+
 
         if self.g_score[node] != self.rhs_score[node]:
             key = self._calculate_key(node)
@@ -50,20 +54,13 @@ class DStarLite:
     def compute_shortest_path(self):
         while self.open_set:
             start_key = self._calculate_key(self.start)
-            top_key, _ = self.open_set[0]
-            if top_key >= start_key and self.rhs_score[self.start] == self.g_score[self.start]:
+            if not self.open_set or self.open_set[0][0] >= start_key and self.rhs_score[self.start] == self.g_score[self.start]:
                 break
 
             key, current = heapq.heappop(self.open_set)
-            if current not in self.open_set_map or self.open_set_map[current] < key:
-                continue
             del self.open_set_map[current]
 
-            old_key = self._calculate_key(current) # This should be key, not a new calculation
-            if old_key < key:
-                heapq.heappush(self.open_set, (key, current)) # Push with the key it was popped with
-                self.open_set_map[current] = key
-            elif self.g_score[current] > self.rhs_score[current]:
+            if self.g_score[current] > self.rhs_score[current]:
                 self.g_score[current] = self.rhs_score[current]
                 for p_node in self._get_predecessors(current):
                     self._update_node(p_node)
@@ -80,8 +77,11 @@ class DStarLite:
         
         self.km += self.heuristic.calculate(self.last_start)
         
+        # Update costs for affected edges
         for cell, new_cost in cost_updates:
-            # Update costs for affected edges by updating the predecessors of the changed cell
+            # Update the underlying cost provider (heuristic in our case)
+            # This is handled by PathPlanner updating its own state
+            self.heuristic.planner.cost_map[cell] = new_cost
             for p_node in self._get_predecessors(cell):
                 self._update_node(p_node)
         
@@ -95,7 +95,13 @@ class DStarLite:
         while current != self.goal:
             successors = list(self._get_successors(current))
             if not successors: return None # Stuck
+            
+            # Find successor with minimum cost + g_score
             best_s = min(successors, key=lambda s: self.heuristic.cost_between(current, s) + self.g_score[s])
+            
+            # Check for dead-end
+            if self.g_score[best_s] == float('inf'): return None
+            
             current = best_s
             path.append(current)
         return path
