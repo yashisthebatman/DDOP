@@ -18,7 +18,6 @@ class DStarLite:
         self.km = 0
         self.last_start = start
         
-        # --- OPTIMIZATION: Pre-compute neighbor moves ---
         moves = list(product([-1, 0, 1], repeat=3))
         moves.remove((0, 0, 0))
         self.MOVES = moves
@@ -60,7 +59,8 @@ class DStarLite:
                 break
 
             key, current = heapq.heappop(self.open_set)
-            del self.open_set_map[current]
+            if current in self.open_set_map:
+                del self.open_set_map[current]
 
             if self.g_score[current] > self.rhs_score[current]:
                 self.g_score[current] = self.rhs_score[current]
@@ -79,7 +79,12 @@ class DStarLite:
         self.km += self.heuristic.calculate(self.last_start)
         
         for cell, new_cost in cost_updates:
+            # Update the underlying cost provider (the planner's cost map)
             self.heuristic.planner.cost_map[cell] = new_cost
+            
+            # --- BUG FIX: Update the now-obstructed cell itself, and its predecessors ---
+            # This ensures the algorithm knows the cell is now unreachable.
+            self._update_node(cell) 
             for p_node in self._get_predecessors(cell):
                 self._update_node(p_node)
         
@@ -99,7 +104,6 @@ class DStarLite:
         return path
 
     def _get_neighbors(self, node):
-        """OPTIMIZED: Iterates over a pre-computed list of moves."""
         for move in self.MOVES:
             yield (node[0] + move[0], node[1] + move[1], node[2] + move[2])
 

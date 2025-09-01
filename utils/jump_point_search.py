@@ -14,12 +14,15 @@ class JumpPointSearch:
         self.came_from = {}
         self.g_score = {start: 0}
         
-        # All 26 possible directions in 3D
         self.directions = list(product([-1, 0, 1], repeat=3))
         self.directions.remove((0, 0, 0))
 
     def search(self):
-        """Main search loop."""
+        """Main search loop, now more robust."""
+        # --- ROBUSTNESS FIX: Handle immediate goal case ---
+        if self.start == self.goal:
+            return [self.start]
+            
         h_start = self.heuristic.calculate(self.start)
         heapq.heappush(self.open_set, (h_start, self.start))
         self.open_set_map[self.start] = h_start
@@ -30,7 +33,8 @@ class JumpPointSearch:
             if current == self.goal:
                 return self._reconstruct_path(current)
 
-            del self.open_set_map[current]
+            if current in self.open_set_map:
+                del self.open_set_map[current]
             
             successors = self._identify_successors(current)
             for successor in successors:
@@ -49,16 +53,28 @@ class JumpPointSearch:
         return None # Path not found
 
     def _identify_successors(self, node):
+        """
+        ROBUSTNESS FIX: Now identifies direct walkable neighbors in addition to jump points.
+        This ensures the search can always progress, even if no long jumps are found.
+        """
         successors = set()
         parent = self.came_from.get(node)
         
         if parent is None:
+            # If starting node, all walkable neighbors are valid successors
             pruned_directions = self.directions
         else:
             direction = tuple(np.sign(np.array(node) - np.array(parent)))
             pruned_directions = self._prune_directions(direction)
-
+        
         for d in pruned_directions:
+            neighbor = (node[0] + d[0], node[1] + d[1], node[2] + d[2])
+            
+            # 1. Add direct, walkable neighbors to ensure progress is always possible
+            if not self.is_obstructed(neighbor):
+                successors.add(neighbor)
+
+            # 2. Search for long-distance jump points
             jump_point = self._jump(node, d)
             if jump_point:
                 successors.add(jump_point)
@@ -73,7 +89,6 @@ class JumpPointSearch:
         if next_node == self.goal: return next_node
         if self._has_forced_neighbor(next_node, direction): return next_node
 
-        # Diagonal case: jump orthogonally first
         if dx != 0 and dy != 0 and dz != 0:
              if self._jump(next_node, (dx, dy, 0)) or self._jump(next_node, (dx, 0, dz)) or self._jump(next_node, (0, dy, dz)):
                  return next_node
@@ -87,11 +102,13 @@ class JumpPointSearch:
         return self._jump(next_node, direction)
 
     def _has_forced_neighbor(self, node, direction):
-        return False # Simplified for performance; full 3D JPS neighbor check is complex
+        return False
 
     def _prune_directions(self, direction):
-        dx, dy, dz = direction
+        # This simplified pruning is kept for performance but is now backed up
+        # by the robust direct neighbor check in _identify_successors.
         pruned = {direction}
+        dx, dy, dz = direction
         if dx != 0:
             pruned.add((dx, dy, 1)); pruned.add((dx, dy, -1)); pruned.add((dx, 1, dz)); pruned.add((dx, -1, dz))
         if dy != 0:
@@ -101,22 +118,13 @@ class JumpPointSearch:
         return list(pruned)
         
     def _reconstruct_path(self, current):
-        """OPTIMIZED: Reconstructs the path using vectorized numpy operations."""
         path = [current]
         while current in self.came_from:
             prev = self.came_from[current]
-            
-            # Vectorized path interpolation between sparse jump points
             p1, p2 = np.array(prev), np.array(current)
             diff = p2 - p1
             num_steps = np.max(np.abs(diff)) + 1
-            
-            # Generate all intermediate grid points in one go
             points = np.linspace(p1, p2, int(num_steps), endpoint=True).round().astype(int)
-            
-            # Append the interpolated path (excluding the end point, which is the start of the next segment)
             path.extend(map(tuple, points[:-1][::-1]))
-            
             current = prev
-            
         return path[::-1]
