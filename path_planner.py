@@ -58,7 +58,8 @@ class PathPlanner3D:
         for i in range(len(node_items)):
             for j in range(i + 1, len(node_items)):
                 name1, pos1 = node_items[i]; name2, pos2 = node_items[j]
-                if not self.env.is_line_obstructed(pos1, pos2, samples=30):
+                # --- THIS IS THE CORRECTED LINE ---
+                if not self.env.is_line_obstructed(pos1, pos2):
                     dist = np.linalg.norm(np.array(pos1) - np.array(pos2))
                     self.abstract_graph[name1][name2] = dist
                     self.abstract_graph[name2][name1] = dist
@@ -141,14 +142,50 @@ class PathPlanner3D:
     def _stitch_path_segments(self, start_from_segment=0) -> List[WorldCoord]:
         """Combines the low-level path segments into one continuous world path."""
         final_path = []
-        if start_from_segment == 0:
-            final_path.append(self.subgoal_path[0])
+        # If replanning, the new path starts from the drone's current position, not the start of the segment
+        # The caller (app.py) will handle stitching this into the overall path.
+        # So we only need to construct the path from the first node of the first segment provided.
+        if start_from_segment > 0:
+             # The first node in the new segment list is the drone's position.
+             pass # Logic is handled by the loop structure
+        else:
+             final_path.append(self.subgoal_path[0])
 
         for i in range(start_from_segment, len(self.full_path_segments)):
             segment_world = [self._grid_to_world(p) for p in self.full_path_segments[i]]
-            final_path.extend(segment_world[1:])
-        return final_path
+            # If it's the very first segment being stitched, include its first point.
+            # Otherwise, skip it to avoid duplication with the end of the previous segment.
+            if i == start_from_segment and start_from_segment > 0:
+                 final_path.extend(segment_world)
+            elif i > start_from_segment:
+                 final_path.extend(segment_world[1:])
+            elif start_from_segment == 0:
+                 final_path.extend(segment_world[1:])
+
+        # This logic is getting complex. A simpler approach:
+        # The replan_path should return only the *new part* of the path.
+        # The app should be responsible for splicing it.
+        # Let's adjust stitch_path_segments and replan_path for clarity.
+
+        # Let's revert to a simpler, more robust stitching logic for now.
+        final_path_stitched = []
+        if start_from_segment == 0:
+            final_path_stitched.append(self.subgoal_path[0])
         
+        for i in range(len(self.full_path_segments)):
+            segment_world = [self._grid_to_world(p) for p in self.full_path_segments[i]]
+            if i == 0:
+                final_path_stitched.extend(segment_world)
+            else:
+                final_path_stitched.extend(segment_world[1:])
+        
+        # If replanning, we need to find where the drone's position fits
+        # to return just the path from that point forward.
+        # For now, returning the full re-stitched path is safer.
+        # The app will reset its index to 0.
+        return final_path_stitched
+
+
     def _get_heuristic(self, mode, payload, goal_grid, time_w):
         if mode == "time": heuristic_class = TimeHeuristic
         elif mode == "energy": heuristic_class = EnergyHeuristic
