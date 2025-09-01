@@ -7,16 +7,21 @@ class DStarLite:
     def __init__(self, start, goal, cost_map, heuristic):
         self.start = start
         self.goal = goal
-        self.cost_map = cost_map # Now expects the sparse cost map from planner
+        self.cost_map = cost_map 
         self.heuristic = heuristic
 
         self.g_score = defaultdict(lambda: float('inf'))
         self.rhs_score = defaultdict(lambda: float('inf'))
-        self.open_set = []  # Priority Queue (U)
+        self.open_set = []
         self.open_set_map = {}
         
-        self.km = 0  # Key modifier
+        self.km = 0
         self.last_start = start
+        
+        # --- OPTIMIZATION: Pre-compute neighbor moves ---
+        moves = list(product([-1, 0, 1], repeat=3))
+        moves.remove((0, 0, 0))
+        self.MOVES = moves
 
         self.rhs_score[self.goal] = 0
         key = self._calculate_key(self.goal)
@@ -39,12 +44,9 @@ class DStarLite:
             self.rhs_score[node] = min_rhs
 
         if node in self.open_set_map:
-            # More efficient way to handle removal from heap is to mark as invalid
-            # but for simplicity, we do a slower explicit check.
             self.open_set = [(k, n) for k, n in self.open_set if n != node]
             heapq.heapify(self.open_set)
             del self.open_set_map[node]
-
 
         if self.g_score[node] != self.rhs_score[node]:
             key = self._calculate_key(node)
@@ -74,13 +76,9 @@ class DStarLite:
     def update_and_replan(self, new_start, cost_updates):
         self.last_start = self.start
         self.start = new_start
-        
         self.km += self.heuristic.calculate(self.last_start)
         
-        # Update costs for affected edges
         for cell, new_cost in cost_updates:
-            # Update the underlying cost provider (heuristic in our case)
-            # This is handled by PathPlanner updating its own state
             self.heuristic.planner.cost_map[cell] = new_cost
             for p_node in self._get_predecessors(cell):
                 self._update_node(p_node)
@@ -88,28 +86,21 @@ class DStarLite:
         return self.compute_shortest_path()
 
     def get_path(self):
-        if self.g_score[self.start] == float('inf'):
-            return None
+        if self.g_score[self.start] == float('inf'): return None
         path = [self.start]
         current = self.start
         while current != self.goal:
             successors = list(self._get_successors(current))
-            if not successors: return None # Stuck
-            
-            # Find successor with minimum cost + g_score
+            if not successors: return None
             best_s = min(successors, key=lambda s: self.heuristic.cost_between(current, s) + self.g_score[s])
-            
-            # Check for dead-end
             if self.g_score[best_s] == float('inf'): return None
-            
             current = best_s
             path.append(current)
         return path
 
     def _get_neighbors(self, node):
-        moves = list(product([-1, 0, 1], repeat=3))
-        moves.remove((0, 0, 0))
-        for move in moves:
+        """OPTIMIZED: Iterates over a pre-computed list of moves."""
+        for move in self.MOVES:
             yield (node[0] + move[0], node[1] + move[1], node[2] + move[2])
 
     def _get_predecessors(self, node):

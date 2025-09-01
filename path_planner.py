@@ -1,16 +1,17 @@
 import numpy as np
 import logging
 from typing import Tuple, List, Optional
-from collections import defaultdict
+from collections import defaultdict, deque
 import heapq
 import time
+from itertools import product
 
 import config
 from environment import Environment
 from ml_predictor.predictor import EnergyTimePredictor
 from utils.heuristics import TimeHeuristic, EnergyHeuristic, BalancedHeuristic
-from utils.jump_point_search import JumpPointSearch # Tactical Engine 1: Speed
-from utils.d_star_lite import DStarLite # Tactical Engine 2: Replanning
+from utils.jump_point_search import JumpPointSearch
+from utils.d_star_lite import DStarLite
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 WorldCoord = Tuple[float, float, float]
@@ -23,24 +24,28 @@ class PathPlanner3D:
         self.resolution = 25
         self.grid_shape, self.origin_lon, self.origin_lat = self._get_grid_params()
         
-        # Sparse cost map for environmental effects (wind, etc.), NOT obstacles
         self.cost_map = {} 
-        # self._precompute_environmental_costs() # Optional: add wind pre-computation here if desired
-
-        # --- Strategic Layer: Abstract Graph ---
         self.abstract_graph = defaultdict(dict)
         self.abstract_nodes = {}
         self._build_abstract_graph()
         
-        # --- Mission State ---
         self.subgoal_path: Optional[List[WorldCoord]] = None
         self.full_path_segments: Optional[List[List[GridCoord]]] = None
         
         self._calculate_heuristic_baselines()
+        
+        dummy_goal = (0, 0, 0)
+        self.time_h = TimeHeuristic(self, 0.0, dummy_goal)
+        self.energy_h = EnergyHeuristic(self, 0.0, dummy_goal)
+        self.balanced_h = BalancedHeuristic(self, 0.0, dummy_goal)
+        
+        self.NEIGHBOR_MOVES = list(product([-1, 0, 1], repeat=3))
+        self.NEIGHBOR_MOVES.remove((0, 0, 0))
+        
         logging.info("Hybrid Planner ready. Abstract graph and tactical engines are online.")
 
+    # ... _build_abstract_graph and _a_star_on_abstract_graph are unchanged ...
     def _build_abstract_graph(self):
-        """Constructs the high-level graph of waypoints (hubs, destinations, NFZ corners)."""
         logging.info("Building abstract waypoint graph...")
         start_time = time.time()
         self.abstract_nodes.clear(); self.abstract_graph.clear()
@@ -58,7 +63,6 @@ class PathPlanner3D:
         for i in range(len(node_items)):
             for j in range(i + 1, len(node_items)):
                 name1, pos1 = node_items[i]; name2, pos2 = node_items[j]
-                # --- THIS IS THE CORRECTED LINE ---
                 if not self.env.is_line_obstructed(pos1, pos2):
                     dist = np.linalg.norm(np.array(pos1) - np.array(pos2))
                     self.abstract_graph[name1][name2] = dist
@@ -66,28 +70,38 @@ class PathPlanner3D:
         logging.info(f"Abstract graph built in {time.time() - start_time:.2f}s.")
 
     def _a_star_on_abstract_graph(self, start_pos, end_pos):
-        start_name = "动态起点"; self.abstract_nodes[start_name] = start_pos
-        end_name = "动态终点"; self.abstract_nodes[end_name] = end_pos
-        for name, pos in self.abstract_nodes.items():
-            if name not in [start_name, end_name]:
-                if not self.env.is_line_obstructed(start_pos, pos): self.abstract_graph[start_name][name] = np.linalg.norm(np.array(start_pos)-np.array(pos))
-                if not self.env.is_line_obstructed(end_pos, pos): self.abstract_graph[name][end_name] = np.linalg.norm(np.array(end_pos)-np.array(pos))
+        start_name = "dynamic_start"; self.abstract_nodes[start_name] = start_pos
+        end_name = "dynamic_end"; self.abstract_nodes[end_name] = end_pos
+        
+        temp_edges = defaultdict(dict)
+        all_nodes = list(self.abstract_nodes.items())
+        for name, pos in all_nodes:
+             if name != start_name and not self.env.is_line_obstructed(start_pos, pos):
+                 temp_edges[start_name][name] = np.linalg.norm(np.array(start_pos)-np.array(pos))
+             if name != end_name and not self.env.is_line_obstructed(end_pos, pos):
+                 temp_edges[name][end_name] = np.linalg.norm(np.array(end_pos)-np.array(pos))
+        if not self.env.is_line_obstructed(start_pos, end_pos):
+            temp_edges[start_name][end_name] = np.linalg.norm(np.array(start_pos) - np.array(end_pos))
 
-        q, came_from, cost = [(0, start_name, [])], {}, {start_name: 0}
+        graph_view = {**self.abstract_graph, **temp_edges}
+        for k,v in temp_edges.items(): graph_view[k] = {**self.abstract_graph.get(k, {}), **v}
+
+        q, cost = [(0, start_name, [])], {start_name: 0}
         while q:
             _, current, path = heapq.heappop(q)
             if current == end_name: return path + [current]
-            for neighbor, weight in self.abstract_graph[current].items():
+            
+            neighbors = {**self.abstract_graph.get(current, {}), **temp_edges.get(current, {})}
+            for neighbor, weight in neighbors.items():
                 new_cost = cost[current] + weight
                 if neighbor not in cost or new_cost < cost[neighbor]:
                     cost[neighbor] = new_cost
                     prio = new_cost + np.linalg.norm(np.array(self.abstract_nodes[neighbor])-np.array(self.abstract_nodes[end_name]))
                     heapq.heappush(q, (prio, neighbor, path + [current]))
         return None
-
+    
     def find_path(self, start_pos: WorldCoord, end_pos: WorldCoord, payload_kg: float, optimization_mode: str, time_weight: float = 0.5) -> Tuple[Optional[List[WorldCoord]], str]:
-        """Finds a path using the two-tiered hierarchical planner with JPS for tactical planning."""
-        self._build_abstract_graph() # Rebuild to include dynamic obstacles in strategic view
+        self._build_abstract_graph()
         subgoal_names = self._a_star_on_abstract_graph(start_pos, end_pos)
         if not subgoal_names: return None, "High-level planner failed to find a route."
 
@@ -96,10 +110,17 @@ class PathPlanner3D:
 
         for i in range(len(self.subgoal_path) - 1):
             p1, p2 = self.subgoal_path[i], self.subgoal_path[i+1]
-            start_grid, end_grid = self._world_to_grid(p1), self._world_to_grid(p2)
+            
+            start_grid = self._find_nearest_valid_node(self._world_to_grid(p1))
+            end_grid = self._find_nearest_valid_node(self._world_to_grid(p2))
+
+            if not start_grid or not end_grid:
+                return None, f"Path Error: Could not find valid grid cell for segment {i} start/end."
+            
             if start_grid == end_grid: continue
 
             heuristic = self._get_heuristic(optimization_mode, payload_kg, end_grid, time_weight)
+            
             jps = JumpPointSearch(start_grid, end_grid, self.is_grid_obstructed, heuristic)
             path_segment_grid = jps.search()
             
@@ -109,96 +130,98 @@ class PathPlanner3D:
         return self._stitch_path_segments(), "Hierarchical path found successfully"
 
     def replan_path(self, drone_pos: WorldCoord, current_segment_idx: int, changed_nfz: list, payload_kg, opt_mode, time_w) -> Tuple[Optional[List[WorldCoord]], str]:
-        """Replans a single mission segment using D* Lite."""
         if not self.subgoal_path or not self.full_path_segments: return None, "No active mission to replan."
         logging.info(f"D* Lite activated for segment {current_segment_idx}...")
 
-        # 1. Define the segment to be replanned
-        start_grid = self._world_to_grid(drone_pos)
+        start_grid = self._find_nearest_valid_node(self._world_to_grid(drone_pos))
         end_wp = self.subgoal_path[current_segment_idx + 1]
-        end_grid = self._world_to_grid(end_wp)
+        end_grid = self._find_nearest_valid_node(self._world_to_grid(end_wp))
 
-        # 2. Setup D* Lite
+        if not start_grid or not end_grid:
+            return None, "Replan Error: Could not find valid grid cell for drone or subgoal."
+
         heuristic = self._get_heuristic(opt_mode, payload_kg, end_grid, time_w)
+        
         d_star = DStarLite(start_grid, end_grid, self.cost_map, heuristic)
         
-        # 3. Inform D* Lite of cost changes
         changed_cells = self._get_grid_cells_in_nfz(changed_nfz)
         cost_updates = [(cell, float('inf')) for cell in changed_cells]
         for cell, cost in cost_updates: self.cost_map[cell] = cost
 
-        # 4. Compute initial path, then update and replan
-        d_star.compute_shortest_path() # Initial computation
+        d_star.compute_shortest_path()
         new_segment_grid = d_star.update_and_replan(start_grid, cost_updates)
 
         if not new_segment_grid: return None, "D* Lite failed to find a repair path."
         
-        # 5. Update the master plan with the new segment
         self.full_path_segments[current_segment_idx] = new_segment_grid
         
-        return self._stitch_path_segments(start_from_segment=current_segment_idx), "D* Lite replan successful."
+        return self._stitch_path_segments(), "D* Lite replan successful."
 
-    # --- Helper & Utility Methods ---
-    def _stitch_path_segments(self, start_from_segment=0) -> List[WorldCoord]:
-        """Combines the low-level path segments into one continuous world path."""
-        final_path = []
-        # If replanning, the new path starts from the drone's current position, not the start of the segment
-        # The caller (app.py) will handle stitching this into the overall path.
-        # So we only need to construct the path from the first node of the first segment provided.
-        if start_from_segment > 0:
-             # The first node in the new segment list is the drone's position.
-             pass # Logic is handled by the loop structure
-        else:
-             final_path.append(self.subgoal_path[0])
+    def is_grid_obstructed(self, grid_coord: GridCoord) -> bool:
+        """
+        ROBUST: Checks if the entire 3D volume of a grid cell intersects any obstacle.
+        """
+        # 1. Standard out-of-bounds check
+        if not (0 <= grid_coord[0] < self.grid_shape[0] and \
+                0 <= grid_coord[1] < self.grid_shape[1] and \
+                0 <= grid_coord[2] < self.grid_shape[2]):
+            return True
+            
+        # 2. Check sparse cost map for dynamically added obstacles (from D* Lite)
+        if self.cost_map.get(grid_coord, 0) == float('inf'):
+            return True
 
-        for i in range(start_from_segment, len(self.full_path_segments)):
-            segment_world = [self._grid_to_world(p) for p in self.full_path_segments[i]]
-            # If it's the very first segment being stitched, include its first point.
-            # Otherwise, skip it to avoid duplication with the end of the previous segment.
-            if i == start_from_segment and start_from_segment > 0:
-                 final_path.extend(segment_world)
-            elif i > start_from_segment:
-                 final_path.extend(segment_world[1:])
-            elif start_from_segment == 0:
-                 final_path.extend(segment_world[1:])
-
-        # This logic is getting complex. A simpler approach:
-        # The replan_path should return only the *new part* of the path.
-        # The app should be responsible for splicing it.
-        # Let's adjust stitch_path_segments and replan_path for clarity.
-
-        # Let's revert to a simpler, more robust stitching logic for now.
-        final_path_stitched = []
-        if start_from_segment == 0:
-            final_path_stitched.append(self.subgoal_path[0])
+        # 3. Perform a volume-based check using the R-tree
+        # Calculate the world coordinates of the cell's two opposite corners
+        min_corner_world = self._grid_to_world(grid_coord)
+        max_corner_world = self._grid_to_world((grid_coord[0] + 1, grid_coord[1] + 1, grid_coord[2] + 1))
         
-        for i in range(len(self.full_path_segments)):
-            segment_world = [self._grid_to_world(p) for p in self.full_path_segments[i]]
+        # Create a bounding box tuple for the R-tree query
+        cell_bounds = (
+            min_corner_world[0], min_corner_world[1], min_corner_world[2],
+            max_corner_world[0], max_corner_world[1], max_corner_world[2]
+        )
+        
+        # If the number of intersections is > 0, the cell is obstructed
+        return self.env.obstacle_index.count(cell_bounds) > 0
+
+    # ... other methods are unchanged ...
+    def _find_nearest_valid_node(self, grid_coord: GridCoord) -> Optional[GridCoord]:
+        if not self.is_grid_obstructed(grid_coord):
+            return grid_coord
+        
+        q = deque([grid_coord])
+        visited = {grid_coord}
+        
+        while q:
+            current = q.popleft()
+            for move in self.NEIGHBOR_MOVES:
+                neighbor = (current[0] + move[0], current[1] + move[1], current[2] + move[2])
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    if not self.is_grid_obstructed(neighbor):
+                        return neighbor
+                    q.append(neighbor)
+        return None
+
+    def _stitch_path_segments(self) -> List[WorldCoord]:
+        final_path_stitched = []
+        for i, segment_grid in enumerate(self.full_path_segments):
+            segment_world = [self._grid_to_world(p) for p in segment_grid]
             if i == 0:
                 final_path_stitched.extend(segment_world)
             else:
                 final_path_stitched.extend(segment_world[1:])
-        
-        # If replanning, we need to find where the drone's position fits
-        # to return just the path from that point forward.
-        # For now, returning the full re-stitched path is safer.
-        # The app will reset its index to 0.
         return final_path_stitched
-
-
+        
     def _get_heuristic(self, mode, payload, goal_grid, time_w):
-        if mode == "time": heuristic_class = TimeHeuristic
-        elif mode == "energy": heuristic_class = EnergyHeuristic
-        else: heuristic_class = BalancedHeuristic
-        return heuristic_class(self, payload, goal_grid, time_w)
-
-    def is_grid_obstructed(self, grid_coord: GridCoord) -> bool:
-        if not (0 <= grid_coord[0] < self.grid_shape[0] and 0 <= grid_coord[1] < self.grid_shape[1] and 0 <= grid_coord[2] < self.grid_shape[2]):
-            return True
-        if self.cost_map.get(grid_coord, 0) == float('inf'): # Quick check for dynamic obstacles
-            return True
-        world_coord = self._grid_to_world(grid_coord)
-        return self.env.is_point_obstructed(world_coord)
+        if mode == "time": h = self.time_h
+        elif mode == "energy": h = self.energy_h
+        else: h = self.balanced_h
+        h.goal = goal_grid
+        h.payload_kg = payload
+        h.time_weight = time_w
+        return h
     
     def _get_grid_cells_in_nfz(self, zone: list) -> list:
         min_c=self._world_to_grid((zone[0],zone[1],0));max_c=self._world_to_grid((zone[2],zone[3],config.MAX_ALTITUDE))

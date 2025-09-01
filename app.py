@@ -4,9 +4,11 @@ import config; from environment import Environment, WeatherSystem; from ml_predi
 
 @st.cache_resource
 def load_planner(): log_event("Loading hybrid planner...");env=Environment(WeatherSystem());predictor=EnergyTimePredictor();planner=PathPlanner3D(env,predictor);log_event("Planner loaded.");return planner
-defaults={'stage':'setup','log':[],'mission_running':False,'planned_path':None,'total_time':0.0,'total_energy':0.0,'drone_pos':None,'path_index':0,'initial_payload':0.0, 'current_subgoal_index': 0}
+
+defaults={'stage':'setup','log':[],'mission_running':False,'planned_path':None, 'planned_path_np': None, 'total_time':0.0,'total_energy':0.0,'drone_pos':None,'path_index':0,'initial_payload':0.0, 'current_subgoal_index': 0}
 for k,v in defaults.items():
     if k not in st.session_state: st.session_state[k]=v
+
 def log_event(m): st.session_state.log.insert(0,f"{time.strftime('%H:%M:%S')} - {m}")
 def reset_mission_state():
     for k,v in defaults.items():
@@ -35,7 +37,11 @@ def planning_stage():
         path, status = planner.find_path(takeoff,order,payload,sm,bw)
         if path is None:st.error(f"Path planning failed: {status}");st.button("New",on_click=reset_mission_state);return
         full_path=[hub]+path
-        st.session_state.planned_path=full_path;st.session_state.drone_pos=full_path[0];st.session_state.path_index=0;log_event("✅ Initial mission plan found.")
+        
+        st.session_state.planned_path=full_path
+        st.session_state.planned_path_np = np.array(full_path)
+        
+        st.session_state.drone_pos=full_path[0];st.session_state.path_index=0;log_event("✅ Initial mission plan found.")
     st.session_state.stage='simulation';st.rerun()
 def simulation_stage():
     st.header(f"Mission Simulation ({st.session_state.optimization_preference})");c1,c2=st.columns([1,2.5])
@@ -55,7 +61,11 @@ def simulation_stage():
         for nfz in planner.env.static_nfzs:fig.add_trace(create_nfz_box(nfz))
         for dnfz in planner.env.dynamic_nfzs:fig.add_trace(create_nfz_box(dnfz,color='yellow',opacity=0.25))
         if planner.subgoal_path: fig.add_trace(go.Scatter3d(x=[p[0] for p in planner.subgoal_path], y=[p[1] for p in planner.subgoal_path], z=[p[2] for p in planner.subgoal_path], mode='markers', marker=dict(color='orange', size=6, symbol='cross'), name='Subgoals'))
-        path_np=np.array(st.session_state.planned_path);fig.add_trace(go.Scatter3d(x=path_np[:,0],y=path_np[:,1],z=path_np[:,2],mode='lines',line=dict(width=4,color='yellow'),name='Planned Path'))
+        
+        if st.session_state.planned_path_np is not None:
+            path_np = st.session_state.planned_path_np
+            fig.add_trace(go.Scatter3d(x=path_np[:,0],y=path_np[:,1],z=path_np[:,2],mode='lines',line=dict(width=4,color='yellow'),name='Planned Path'))
+
         dp=st.session_state.drone_pos;fig.add_trace(go.Scatter3d(x=[dp[0]],y=[dp[1]],z=[dp[2]],mode='markers',marker=dict(size=10,color='red',symbol='circle-open'),name='Live Drone'))
         fig.update_layout(margin=dict(l=0,r=0,b=0,t=0),scene=dict(aspectratio=dict(x=1,y=1,z=0.4),bgcolor='rgb(20,24,54)'),legend=dict(font=dict(color='white')));st.plotly_chart(fig,use_container_width=True,height=700)
 with st.sidebar:st.header("Ops Log");log_c=st.container(height=800);
@@ -76,7 +86,9 @@ if planner.predictor.models:
                         drone_pos, st.session_state.current_subgoal_index, planner.env.dynamic_nfzs[-1],
                         st.session_state.initial_payload, st.session_state.optimization_preference, st.session_state.get('balance_weight', 0.5))
                 if new_path:
-                    st.session_state.planned_path=new_path;st.session_state.path_index=0
+                    st.session_state.planned_path = new_path
+                    st.session_state.planned_path_np = np.array(new_path)
+                    st.session_state.path_index = 0
                     log_event("✅ D* Lite Replanning complete.")
                 else:log_event(f"❌ Replanning failed: {status}. Stopping.");st.session_state.mission_running=False
                 planner.env.was_nfz_just_added=False; path=st.session_state.planned_path
@@ -84,11 +96,13 @@ if planner.predictor.models:
             if st.session_state.path_index >= len(path) -1: st.rerun()
             p1,p2=path[idx],path[idx+1];current_payload=st.session_state.initial_payload
             if np.linalg.norm(np.array(p1[:2])-np.array(st.session_state.destination[:2]))<50:current_payload=0
+            
+            # --- THIS IS THE CORRECTED LINE ---
             p_prev=path[idx-1]if idx>0 else None;wind=planner.env.weather.get_wind_at_location(p1[0],p1[1]);t,e=planner.predictor.predict(p1,p2,current_payload,wind,p_prev)
+            
             st.session_state.total_time+=t;st.session_state.total_energy+=e;st.session_state.path_index+=1;st.session_state.drone_pos=p2
-            # Check if we reached a subgoal
             next_subgoal_idx = st.session_state.current_subgoal_index + 1
-            if next_subgoal_idx < len(planner.subgoal_path) and np.allclose(p2, planner.subgoal_path[next_subgoal_idx], atol=10):
+            if next_subgoal_idx < len(planner.subgoal_path) and np.linalg.norm(np.array(p2)-np.array(planner.subgoal_path[next_subgoal_idx])) < planner.resolution:
                 st.session_state.current_subgoal_index = next_subgoal_idx
                 log_event(f"Waypoint {next_subgoal_idx} reached.")
             time.sleep(0.1);st.rerun()
