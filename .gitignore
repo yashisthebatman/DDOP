@@ -4,4 +4,4 @@ __pycache__/
 
 # Ignore virtual environment
 venv/
-synthetic_drone_data.csv/
+synthetic_drone_data.csv
