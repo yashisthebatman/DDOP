@@ -3,11 +3,12 @@ from itertools import product
 import numpy as np
 
 class JumpPointSearch:
-    def __init__(self, start, goal, is_obstructed_func, heuristic):
+    def __init__(self, start, goal, is_obstructed_func, heuristic, grid_shape):
         self.start = start
         self.goal = goal
         self.is_obstructed = is_obstructed_func
         self.heuristic = heuristic
+        self.grid_shape = grid_shape # Store grid boundaries
 
         self.open_set = []
         self.open_set_map = {}
@@ -18,8 +19,6 @@ class JumpPointSearch:
         self.directions.remove((0, 0, 0))
 
     def search(self):
-        """Main search loop, now more robust."""
-        # --- ROBUSTNESS FIX: Handle immediate goal case ---
         if self.start == self.goal:
             return [self.start]
             
@@ -50,18 +49,13 @@ class JumpPointSearch:
                     
                     self.came_from[successor] = current
         
-        return None # Path not found
+        return None
 
     def _identify_successors(self, node):
-        """
-        ROBUSTNESS FIX: Now identifies direct walkable neighbors in addition to jump points.
-        This ensures the search can always progress, even if no long jumps are found.
-        """
         successors = set()
         parent = self.came_from.get(node)
         
         if parent is None:
-            # If starting node, all walkable neighbors are valid successors
             pruned_directions = self.directions
         else:
             direction = tuple(np.sign(np.array(node) - np.array(parent)))
@@ -70,11 +64,9 @@ class JumpPointSearch:
         for d in pruned_directions:
             neighbor = (node[0] + d[0], node[1] + d[1], node[2] + d[2])
             
-            # 1. Add direct, walkable neighbors to ensure progress is always possible
             if not self.is_obstructed(neighbor):
                 successors.add(neighbor)
 
-            # 2. Search for long-distance jump points
             jump_point = self._jump(node, d)
             if jump_point:
                 successors.add(jump_point)
@@ -84,7 +76,12 @@ class JumpPointSearch:
     def _jump(self, node, direction):
         dx, dy, dz = direction
         next_node = (node[0] + dx, node[1] + dy, node[2] + dz)
-        
+
+        # --- CRASH FIX: Add boundary check to stop unbounded recursion ---
+        nx, ny, nz = next_node
+        if not (0 <= nx < self.grid_shape[0] and 0 <= ny < self.grid_shape[1] and 0 <= nz < self.grid_shape[2]):
+            return None # Stop jumping if we go off the map
+
         if self.is_obstructed(next_node): return None
         if next_node == self.goal: return next_node
         if self._has_forced_neighbor(next_node, direction): return next_node
@@ -105,8 +102,6 @@ class JumpPointSearch:
         return False
 
     def _prune_directions(self, direction):
-        # This simplified pruning is kept for performance but is now backed up
-        # by the robust direct neighbor check in _identify_successors.
         pruned = {direction}
         dx, dy, dz = direction
         if dx != 0:

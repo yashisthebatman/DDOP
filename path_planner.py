@@ -99,7 +99,7 @@ class PathPlanner3D:
                     prio = new_cost + np.linalg.norm(np.array(self.abstract_nodes[neighbor])-np.array(self.abstract_nodes[end_name]))
                     heapq.heappush(q, (prio, neighbor, path + [current]))
         return None
-    
+
     def find_path(self, start_pos: WorldCoord, end_pos: WorldCoord, payload_kg: float, optimization_mode: str, time_weight: float = 0.5) -> Tuple[Optional[List[WorldCoord]], str]:
         self._build_abstract_graph()
         subgoal_names = self._a_star_on_abstract_graph(start_pos, end_pos)
@@ -121,7 +121,8 @@ class PathPlanner3D:
 
             heuristic = self._get_heuristic(optimization_mode, payload_kg, end_grid, time_weight)
             
-            jps = JumpPointSearch(start_grid, end_grid, self.is_grid_obstructed, heuristic)
+            # --- CRASH FIX: Pass grid_shape to JPS constructor ---
+            jps = JumpPointSearch(start_grid, end_grid, self.is_grid_obstructed, heuristic, self.grid_shape)
             path_segment_grid = jps.search()
             
             if not path_segment_grid: return None, f"Tactical planner (JPS) failed on segment {i}."
@@ -129,6 +130,7 @@ class PathPlanner3D:
         
         return self._stitch_path_segments(), "Hierarchical path found successfully"
 
+    # ... rest of the file is unchanged ...
     def replan_path(self, drone_pos: WorldCoord, current_segment_idx: int, changed_nfz: list, payload_kg, opt_mode, time_w) -> Tuple[Optional[List[WorldCoord]], str]:
         if not self.subgoal_path or not self.full_path_segments: return None, "No active mission to replan."
         logging.info(f"D* Lite activated for segment {current_segment_idx}...")
@@ -158,34 +160,24 @@ class PathPlanner3D:
         return self._stitch_path_segments(), "D* Lite replan successful."
 
     def is_grid_obstructed(self, grid_coord: GridCoord) -> bool:
-        """
-        ROBUST: Checks if the entire 3D volume of a grid cell intersects any obstacle.
-        """
-        # 1. Standard out-of-bounds check
         if not (0 <= grid_coord[0] < self.grid_shape[0] and \
                 0 <= grid_coord[1] < self.grid_shape[1] and \
                 0 <= grid_coord[2] < self.grid_shape[2]):
             return True
             
-        # 2. Check sparse cost map for dynamically added obstacles (from D* Lite)
         if self.cost_map.get(grid_coord, 0) == float('inf'):
             return True
 
-        # 3. Perform a volume-based check using the R-tree
-        # Calculate the world coordinates of the cell's two opposite corners
         min_corner_world = self._grid_to_world(grid_coord)
         max_corner_world = self._grid_to_world((grid_coord[0] + 1, grid_coord[1] + 1, grid_coord[2] + 1))
         
-        # Create a bounding box tuple for the R-tree query
         cell_bounds = (
             min_corner_world[0], min_corner_world[1], min_corner_world[2],
             max_corner_world[0], max_corner_world[1], max_corner_world[2]
         )
         
-        # If the number of intersections is > 0, the cell is obstructed
         return self.env.obstacle_index.count(cell_bounds) > 0
 
-    # ... other methods are unchanged ...
     def _find_nearest_valid_node(self, grid_coord: GridCoord) -> Optional[GridCoord]:
         if not self.is_grid_obstructed(grid_coord):
             return grid_coord
