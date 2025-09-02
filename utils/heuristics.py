@@ -10,6 +10,7 @@ from config import (
     ASCENT_EFFICIENCY, DRONE_BATTERY_WH, DRONE_SPEED_MPS
 )
 
+# Use TYPE_CHECKING to avoid circular import errors
 if TYPE_CHECKING:
     from path_planner import PathPlanner3D
 
@@ -46,15 +47,18 @@ class Heuristic(ABC):
 
 class TimeHeuristic(Heuristic):
     def calculate(self, node: GridCoord) -> float:
+        # Heuristic in grid space is a direct distance calculation
         dist_grid = np.linalg.norm(np.array(node) - np.array(self.goal))
         return dist_grid * self.weight
 
 class EnergyHeuristic(Heuristic):
     def calculate(self, node: GridCoord) -> float:
-        node_world = self.planner._grid_to_world(node)
-        goal_world = self.planner._grid_to_world(self.goal)
+        # Use the planner's coordinate manager for all conversions
+        node_world = self.planner.coord_manager.grid_to_world(node)
+        goal_world = self.planner.coord_manager.grid_to_world(self.goal)
         dist_world = np.linalg.norm(np.array(goal_world) - np.array(node_world))
         
+        # Estimate energy based on distance and potential energy change
         base_energy = dist_world * getattr(self.planner, 'baseline_energy_per_meter', 0.01)
         alt_change = goal_world[2] - node_world[2]
         
@@ -62,7 +66,7 @@ class EnergyHeuristic(Heuristic):
         if alt_change > 0:
             total_mass = DRONE_MASS_KG + self.payload_kg
             joules = (total_mass * GRAVITY * alt_change) / ASCENT_EFFICIENCY
-            p_energy = joules / 3600
+            p_energy = joules / 3600 # Convert Joules to Watt-hours
 
         return self.weight * (base_energy + p_energy)
 
@@ -71,28 +75,32 @@ class BalancedHeuristic(Heuristic):
         super().__init__(planner)
         self.time_h = TimeHeuristic(planner)
         self.energy_h = EnergyHeuristic(planner)
-        self.max_time_est = 3600  # Default, will be updated
-        self.max_energy_est = DRONE_BATTERY_WH # Default, will be updated
+        self.max_time_est = 3600  # Default, will be updated dynamically
+        self.max_energy_est = DRONE_BATTERY_WH # Default, will be updated dynamically
 
     def update_params(self, payload_kg: float, goal: GridCoord, time_weight: float = 0.5, **kwargs):
         super().update_params(payload_kg, goal, time_weight)
         self.time_h.update_params(payload_kg, goal, time_weight)
         self.energy_h.update_params(payload_kg, goal, time_weight)
         
-        # FIX: Implement dynamic normalization
+        # Implement dynamic normalization based on the mission segment scale
         start_node = kwargs.get('start_node')
         if start_node:
-            dist_world = np.linalg.norm(np.array(self.planner._grid_to_world(start_node)) - np.array(self.planner._grid_to_world(goal)))
+            start_world = self.planner.coord_manager.grid_to_world(start_node)
+            goal_world = self.planner.coord_manager.grid_to_world(goal)
+            dist_world = np.linalg.norm(np.array(start_world) - np.array(goal_world))
+            
             # Estimate max time with a 1.5x detour factor
             self.max_time_est = max(1.0, (dist_world / DRONE_SPEED_MPS) * 1.5)
+            
             # Estimate max energy as a fraction of battery based on distance
-            # This is a rough estimate, can be improved
-            total_dist_world = np.linalg.norm(np.array(self.planner._grid_to_world((0,0,0))) - np.array(self.planner._grid_to_world(self.planner.grid_dims)))
-            self.max_energy_est = max(1.0, DRONE_BATTERY_WH * (dist_world / total_dist_world))
-
+            # A more robust estimation could be based on a simplified physics model
+            est_joules = (DRONE_MASS_KG + payload_kg) * 9.81 * dist_world
+            est_wh = (est_joules / 3600) * 1.5 # 1.5x factor for inefficiency and horizontal flight
+            self.max_energy_est = max(1.0, est_wh)
 
     def calculate(self, node: GridCoord) -> float:
-        # Normalize costs to be comparable
+        # Normalize time and energy costs to make them comparable
         time_cost = self.time_h.calculate(node) / self.max_time_est
         energy_cost = self.energy_h.calculate(node) / self.max_energy_est
         

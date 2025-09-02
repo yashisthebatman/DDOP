@@ -13,6 +13,7 @@ from config import *
 from environment import Environment, WeatherSystem
 from path_planner import PathPlanner3D
 from ml_predictor.predictor import EnergyTimePredictor
+from utils.coordinate_manager import CoordinateManager # Not strictly needed, but good practice
 
 @st.cache_resource
 def load_planner():
@@ -20,45 +21,40 @@ def load_planner():
     env = Environment(WeatherSystem())
     predictor = EnergyTimePredictor()
     planner = PathPlanner3D(env, predictor)
-    log_event("Planner loaded.")
+    # FIX: Explicitly call the build method after simple initialization.
+    planner.build_abstract_graph()
+    log_event("Planner loaded and abstract graph built.")
     return planner
 
-defaults = {
-    'stage': 'setup', 'log': [], 'mission_running': False, 'planned_path': None,
+# ... rest of app.py is unchanged ...
+def log_event(m):
+    st.session_state.log.insert(0, f"{time.strftime('%H:%M:%S')} - {m}")
+def reset_mission_state():
+    planner.env.remove_dynamic_obstacles()
+    # The graph needs to be rebuilt to restore any invalidated edges
+    planner.build_abstract_graph()
+    defaults = {
+    'stage': 'setup', 'log': st.session_state.log, 'mission_running': False, 'planned_path': None,
     'planned_path_np': None, 'total_time': 0.0, 'total_energy': 0.0,
     'drone_pos': None, 'path_index': 0, 'initial_payload': 0.0,
     'predicted_time': 0.0, 'predicted_energy': 0.0, 'destination': None,
     'hub_location': None
-}
-for k, v in defaults.items():
-    if k not in st.session_state: st.session_state[k] = v
-
-def log_event(m):
-    st.session_state.log.insert(0, f"{time.strftime('%H:%M:%S')} - {m}")
-
-def reset_mission_state():
-    # FIX: Correctly clear dynamic obstacles and rebuild abstract graph for a clean slate
-    planner.env.remove_dynamic_obstacles()
-    planner._build_abstract_graph_topology()
+    }
     for k, v in defaults.items():
         if k not in ['stage', 'log']: st.session_state[k] = v
     st.session_state.stage = 'setup'
     log_event("Mission reset. Ready for new planning.")
-
 def create_box(b):
     x, y, h = b.center_xy[0], b.center_xy[1], b.height
     dx, dy = b.size_xy[0]/2, b.size_xy[1]/2
     return go.Mesh3d(x=[x-dx, x+dx, x+dx, x-dx, x-dx, x+dx, x+dx, x-dx], y=[y-dy, y-dy, y+dy, y+dy, y-dy, y-dy, y+dy, y+dy], z=[0,0,0,0,h,h,h,h], i=[7,0,0,0,4,4,6,6,4,0,3,2],j=[3,4,1,2,5,6,5,2,0,1,6,3],k=[0,7,2,3,6,7,2,5,1,2,5,6], color='grey', opacity=0.7, name='Building', hoverinfo='none')
-
 def create_nfz_box(z, c='red', o=0.15):
     return go.Mesh3d(x=[z[0],z[2],z[2],z[0],z[0],z[2],z[2],z[0]], y=[z[1],z[1],z[3],z[3],z[1],z[1],z[3],z[3]], z=[0,0,0,0,MAX_ALTITUDE,MAX_ALTITUDE,MAX_ALTITUDE,MAX_ALTITUDE], color=c, opacity=o, name='No-Fly Zone', hoverinfo='name')
-
 def check_replanning_triggers():
     if planner.env.was_nfz_just_added:
         log_event("🚨 New NFZ detected! Triggering replan...")
         return True
     return False
-
 def calculate_mission_summary(path, payload):
     if not path or len(path) < 2: return 0, 0
     total_time, total_energy = 0, 0
@@ -67,7 +63,6 @@ def calculate_mission_summary(path, payload):
         t, e = planner.predictor.fallback_predictor.predict(path[i], path[i+1], payload, np.array([0,0,0]), p_prev)
         total_time += t; total_energy += e
     return total_time, total_energy
-
 def setup_stage():
     st.header("1. Mission Parameters")
     c1, c2 = st.columns(2)
@@ -80,12 +75,10 @@ def setup_stage():
     st.session_state.optimization_preference = st.radio("Optimize For:", ["Balanced", "Fastest Path", "Most Battery Efficient"], horizontal=True, index=0)
     if st.session_state.optimization_preference == "Balanced":
         st.session_state.balance_weight = st.slider("Priority", 0.0, 1.0, 0.5, 0.05, format="%.2f", help="0.0 = Energy, 1.0 = Time")
-    
     if st.button("🚀 Plan Mission", type="primary", use_container_width=True):
         st.session_state.destination = DESTINATIONS[st.session_state.destination_choice]
         st.session_state.stage = 'planning'
         st.rerun()
-
 def planning_stage():
     mode = st.session_state.optimization_preference
     log_event(f"Planning mission ('{mode}') with payload {st.session_state.payload_kg:.2f}kg...")
@@ -94,18 +87,21 @@ def planning_stage():
         hub, dest = st.session_state.hub_location, st.session_state.destination
         payload = st.session_state.initial_payload = st.session_state.payload_kg
         path, status = planner.find_path((hub[0], hub[1], TAKEOFF_ALTITUDE), dest, payload, mode_map[mode], st.session_state.get('balance_weight', 0.5))
-        
         if path is None:
             st.error(f"Path planning failed: {status}"); st.button("New Mission", on_click=reset_mission_state); return
-        
         full_path = [hub] + path
         pred_time, pred_energy = calculate_mission_summary(full_path, payload)
+        defaults = {
+        'stage': 'setup', 'log': [], 'mission_running': False, 'planned_path': None,
+        'planned_path_np': None, 'total_time': 0.0, 'total_energy': 0.0,
+        'drone_pos': None, 'path_index': 0, 'initial_payload': 0.0,
+        'predicted_time': 0.0, 'predicted_energy': 0.0, 'destination': None,
+        'hub_location': None
+        }
         st.session_state.update(predicted_time=pred_time, predicted_energy=pred_energy, planned_path=full_path, planned_path_np=np.array(full_path), drone_pos=full_path[0], path_index=0)
         log_event(f"✅ Plan found! Est. Time: {pred_time:.1f}s, Est. Energy: {pred_energy:.2f}Wh")
-
     st.session_state.stage = 'simulation'
     st.rerun()
-
 def simulation_stage():
     st.header(f"Mission Simulation ({st.session_state.optimization_preference})")
     c1, c2 = st.columns([1, 2.5])
@@ -114,19 +110,15 @@ def simulation_stage():
         b1, b2 = st.columns(2)
         if b1.button("▶️ Run", disabled=st.session_state.mission_running, use_container_width=True): st.session_state.mission_running = True; st.rerun()
         if b2.button("⏸️ Pause", disabled=not st.session_state.mission_running, use_container_width=True): st.session_state.mission_running = False; st.rerun()
-        
         st.subheader("Mission Summary (Predicted)")
         st.info(f"**Est. Time:** `{st.session_state.predicted_time:.2f} s`\n\n**Est. Energy:** `{st.session_state.predicted_energy:.2f} Wh`")
-        
         st.subheader("Live Status")
         progress = (st.session_state.path_index / (len(st.session_state.planned_path) - 1)) if st.session_state.planned_path and len(st.session_state.planned_path) > 1 else 0
         st.progress(progress, text=f"Progress: {progress:.0%}")
         st.metric("Mission Time (Elapsed)", f"{st.session_state.total_time:.2f} s")
         st.metric("Battery", f"{DRONE_BATTERY_WH - st.session_state.total_energy:.2f} Wh", delta=f"{-st.session_state.total_energy:.2f} Wh used", delta_color="inverse")
-        
         if progress >= 1 and st.session_state.planned_path: st.success("✅ Mission Complete!"); st.session_state.mission_running = False
         if st.button("⬅️ New Mission", use_container_width=True): reset_mission_state(); st.rerun()
-
     with c2:
         fig = go.Figure()
         hub, dest = st.session_state.hub_location, st.session_state.destination
@@ -140,45 +132,34 @@ def simulation_stage():
         if st.session_state.drone_pos: fig.add_trace(go.Scatter3d(x=[st.session_state.drone_pos[0]],y=[st.session_state.drone_pos[1]],z=[st.session_state.drone_pos[2]],mode='markers',marker=dict(size=10,color='red',symbol='cross'),name='Drone'))
         fig.update_layout(margin=dict(l=0,r=0,b=0,t=0), scene=dict(xaxis_title='Lon',yaxis_title='Lat',zaxis_title='Alt (m)',aspectmode='cube'), legend=dict(y=0.99,x=0.01))
         st.plotly_chart(fig, use_container_width=True)
-
     with c1:
         st.subheader("Event Log"); st.dataframe(pd.DataFrame(st.session_state.log, columns=["Log Entry"]), height=150, use_container_width=True)
-
 def main():
+    if 'stage' not in st.session_state:
+        st.session_state.stage = 'setup'
     if st.session_state.stage == 'setup': setup_stage()
     elif st.session_state.stage == 'planning': planning_stage()
     elif st.session_state.stage == 'simulation': simulation_stage()
-    
     if st.session_state.get('mission_running', False):
         planner.env.update_environment(st.session_state.total_time, time_step=0.1)
-        
         if check_replanning_triggers():
             mode = st.session_state.optimization_preference
             mode_map = {"Fastest Path": "time", "Most Battery Efficient": "energy", "Balanced": "balanced"}
-            
-            # FIX: Implement Hierarchical Replanning Fallback
             new_nfz_bounds = planner.env.dynamic_nfzs[-1]['bounds']
-            
-            # 1. Attempt fast tactical replan with D* Lite
             new_path, status = planner.replan_path_with_dstar(
                 st.session_state.drone_pos, st.session_state.destination,
                 new_nfz_bounds, st.session_state.initial_payload,
                 mode_map[mode], st.session_state.get('balance_weight', 0.5)
             )
-            
-            # 2. If D* Lite fails, fall back to a full strategic replan
             if new_path is None:
                 log_event(f"⚠️ D* Lite failed: {status}. Falling back to strategic replan.")
                 with st.spinner("Strategic planner recalculating global route..."):
-                    # Invalidate the high-level graph and find a new global path
                     planner.invalidate_abstract_graph_edges(new_nfz_bounds)
                     new_path, status = planner.find_path(
                         st.session_state.drone_pos, st.session_state.destination,
                         st.session_state.initial_payload, mode_map[mode],
                         st.session_state.get('balance_weight', 0.5)
                     )
-
-            # 3. Process the result of the replanning
             if new_path:
                 log_event(f"✅ Replan successful! New path generated. ({status})")
                 st.session_state.update(planned_path=new_path, planned_path_np=np.array(new_path), path_index=0)
@@ -187,25 +168,20 @@ def main():
                 st.error(f"MISSION FAILED: No valid path found around the new obstacle. Reason: {status}"); 
                 st.session_state.mission_running = False
             planner.env.was_nfz_just_added = False
-        
         path = st.session_state.planned_path
         idx = st.session_state.path_index
         if st.session_state.mission_running and path and idx < len(path) - 1:
             p_prev = path[idx - 1] if idx > 0 else None
             wind_vector = planner.env.weather.get_wind_at_location(path[idx][0], path[idx][1])
             t, e = planner.predictor.predict_energy_time(path[idx], path[idx + 1], st.session_state.initial_payload, wind_vector, p_prev)
-            
             st.session_state.total_time += t
             st.session_state.total_energy += e
             st.session_state.path_index += 1
             st.session_state.drone_pos = path[st.session_state.path_index]
-        
         time.sleep(0.1)
         st.rerun()
 
 if __name__ == "__main__":
     st.set_page_config(layout="wide", page_title="Q-DOP Planner")
     planner = load_planner()
-    # Provide the rest of the project files for context if they exist
-    # utils/geometry.py, utils/a_star.py
     main()

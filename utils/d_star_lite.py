@@ -6,15 +6,18 @@ import numpy as np
 from collections import defaultdict
 from itertools import product
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from utils.coordinate_manager import CoordinateManager
 
 class DStarLite:
-    # FIX: Constructor accepts grid dimensions to prevent out-of-bounds errors
-    def __init__(self, start, goal, cost_map, heuristic, grid_dims):
+    def __init__(self, start: tuple, goal: tuple, cost_map: dict, heuristic, coord_manager: 'CoordinateManager'):
         self.start = start
         self.goal = goal
         self.cost_map = cost_map
         self.heuristic = heuristic
-        self.grid_width, self.grid_height, self.grid_depth = grid_dims
+        self.coord_manager = coord_manager
 
         self.g_score = defaultdict(lambda: float('inf'))
         self.rhs_score = defaultdict(lambda: float('inf'))
@@ -43,7 +46,7 @@ class DStarLite:
         x, y, z = node
         for dx, dy, dz in self.MOVES:
             successor = (x + dx, y + dy, z + dz)
-            if self._is_valid_node(successor):
+            if self.coord_manager.is_valid_grid_position(successor):
                 successors.append(successor)
         return successors
 
@@ -52,16 +55,9 @@ class DStarLite:
         x, y, z = node
         for dx, dy, dz in self.MOVES:
             predecessor = (x - dx, y - dy, z - dz)
-            if self._is_valid_node(predecessor):
+            if self.coord_manager.is_valid_grid_position(predecessor):
                 predecessors.append(predecessor)
         return predecessors
-
-    # FIX: Use the correct grid dimensions for validation
-    def _is_valid_node(self, node):
-        x, y, z = node
-        return (0 <= x < self.grid_width and 
-                0 <= y < self.grid_height and 
-                0 <= z < self.grid_depth)
 
     def _update_node(self, node):
         if node != self.goal:
@@ -76,7 +72,6 @@ class DStarLite:
             self.open_set = [item for item in self.open_set if item != (key_to_remove, node)]
             heapq.heapify(self.open_set)
 
-
         if self.g_score[node] != self.rhs_score[node]:
             key = self._calculate_key(node)
             heapq.heappush(self.open_set, (key, node))
@@ -87,15 +82,14 @@ class DStarLite:
         iterations = 0
         
         while self.open_set and iterations < max_iterations:
+            if not self.open_set: break
             start_key = self._calculate_key(self.start)
-            
             top_key, _ = self.open_set[0]
 
             if top_key >= start_key and self.rhs_score[self.start] == self.g_score[self.start]:
                 break
 
             iterations += 1
-            
             key, current = heapq.heappop(self.open_set)
 
             if current not in self.open_set_map or self.open_set_map[current] != key:
@@ -124,7 +118,6 @@ class DStarLite:
         self.km += self.heuristic.calculate(self.last_start)
         
         for cell in cost_updates:
-            # Assume new cost is infinity for an obstacle
             self.cost_map[cell] = float('inf')
             self._update_node(cell)
             for pred in self._get_predecessors(cell):
@@ -142,10 +135,8 @@ class DStarLite:
         while current != self.goal:
             min_cost = float('inf')
             next_node = None
-            
             successors = self._get_successors(current)
-            if not successors:
-                return None
+            if not successors: return None
 
             for successor in successors:
                 cost = self.heuristic.cost_between(current, successor) + self.g_score[successor]
@@ -160,7 +151,7 @@ class DStarLite:
             current = next_node
             path.append(current)
             
-            if len(path) > (self.grid_width * self.grid_height):
+            if len(path) > (self.coord_manager.grid_width * self.coord_manager.grid_height):
                 logging.error("D* Lite path reconstruction exceeded safety limit.")
                 return None
         

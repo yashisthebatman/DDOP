@@ -1,24 +1,25 @@
-# Core & Data Handling
+# ==============================================================================
+# File: requirements.txt
+# ==============================================================================
+
+# Core scientific and data handling libraries
 numpy
 pandas
-scipy
-shapely
 
-# Machine Learning
+# Pathfinding and graph theory
+networkx
+Rtree         # Python wrapper for libspatialindex
+
+# Simulation environment
+opensimplex   # For Perlin/Simplex noise in weather simulation
+
+# Machine Learning model handling
 scikit-learn
-xgboost
 joblib
 
-# Classical Optimization
-ortools
-
-# Performance
-numba # For JIT compilation
-
-# UI & Visualization
+# Web application framework
 streamlit
 plotly
-opensimplex
-tqdm
 
-rtree
+# Testing framework
+pytest
