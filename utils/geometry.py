@@ -42,19 +42,17 @@ def line_box_intersection(line_start, line_end, box_bounds):
     box_min = np.array([box_bounds[0], box_bounds[1], box_bounds[2]])
     box_max = np.array([box_bounds[3], box_bounds[4], box_bounds[5]])
     
-    # If either endpoint is inside the box
     if (np.all(line_start >= box_min) and np.all(line_start <= box_max)) or \
        (np.all(line_end >= box_min) and np.all(line_end <= box_max)):
         return True
 
     direction = line_end - line_start
     
-    # Handle zero-length segments
     if np.allclose(direction, 0):
         return np.all(line_start >= box_min) and np.all(line_start <= box_max)
     
-    # Avoid division by zero
-    inv_direction = np.divide(1.0, direction, where=direction!=0, out=np.full_like(direction, np.inf))
+    # FIX: Explicitly set the output dtype to float to prevent the casting error.
+    inv_direction = np.divide(1.0, direction, where=direction!=0, out=np.full_like(direction, np.inf, dtype=float))
 
     t_near = (box_min - line_start) * inv_direction
     t_far = (box_max - line_start) * inv_direction
@@ -62,7 +60,6 @@ def line_box_intersection(line_start, line_end, box_bounds):
     tmin = np.max(np.minimum(t_near, t_far))
     tmax = np.min(np.maximum(t_near, t_far))
 
-    # Line intersects box if interval [tmin, tmax] overlaps with [0, 1]
     return tmax >= max(0, tmin) and tmin <= 1
 
 def line_segment_intersects_aabb(p1, p2, box_bounds):
