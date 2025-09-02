@@ -1,13 +1,15 @@
+# ==============================================================================
+# File: ml_predictor/predictor.py
+# ==============================================================================
 import numpy as np
 import os
-import sys
 import joblib
 import logging
 
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(project_root)
-
-import config
+from config import (
+    DRONE_SPEED_MPS, DRONE_VERTICAL_SPEED_MPS, DRONE_MASS_KG, DRONE_BASE_POWER_WATTS,
+    DRONE_ADDITIONAL_WATTS_PER_KG, GRAVITY, ASCENT_EFFICIENCY, TURN_ENERGY_FACTOR
+)
 from utils.geometry import calculate_distance_3d, calculate_vector_angle_3d, calculate_wind_effect
 
 class PhysicsBasedPredictor:
@@ -25,32 +27,30 @@ class PhysicsBasedPredictor:
         if distance_3d < 1e-6:
             return 0, 0
 
-        # --- Reworked Time Prediction for More Realism ---
+        # --- Time Prediction ---
         horizontal_dist = np.linalg.norm([flight_vector[0], flight_vector[1]])
         vertical_dist = abs(flight_vector[2])
 
-        horizontal_time = horizontal_dist / config.DRONE_SPEED_MPS
-        vertical_time = vertical_dist / config.DRONE_VERTICAL_SPEED_MPS # Use separate vertical speed
+        horizontal_time = horizontal_dist / DRONE_SPEED_MPS
+        vertical_time = vertical_dist / DRONE_VERTICAL_SPEED_MPS
         
-        # Apply wind effect primarily to the horizontal component of time
-        time_impact, energy_impact_factor = calculate_wind_effect(flight_vector, wind_vector, config.DRONE_SPEED_MPS)
+        time_impact, energy_impact_factor = calculate_wind_effect(flight_vector, wind_vector, DRONE_SPEED_MPS)
         if time_impact == float('inf'):
             return float('inf'), float('inf')
         
         predicted_time = (horizontal_time * time_impact) + vertical_time
-        # --- End of Time Prediction Rework ---
-
-        total_mass_kg = config.DRONE_MASS_KG + payload_kg
+        
+        # --- Energy Prediction ---
+        total_mass_kg = DRONE_MASS_KG + payload_kg
         altitude_change = p2[2] - p1[2]
         potential_energy_wh = 0
         
         if altitude_change > 0:
-            # Energy to gain potential energy
-            potential_energy_joules = (total_mass_kg * config.GRAVITY * altitude_change) / config.ASCENT_EFFICIENCY
+            potential_energy_joules = (total_mass_kg * GRAVITY * altitude_change) / ASCENT_EFFICIENCY
             potential_energy_wh = potential_energy_joules / 3600
 
         # Energy to overcome drag and maintain lift is proportional to time spent flying
-        base_power_to_hover = 50 + (total_mass_kg * 10) 
+        base_power_to_hover = DRONE_BASE_POWER_WATTS + (total_mass_kg * DRONE_ADDITIONAL_WATTS_PER_KG) 
         horizontal_power = base_power_to_hover * energy_impact_factor
         horizontal_energy_wh = (horizontal_power * predicted_time) / 3600
         
@@ -61,8 +61,7 @@ class PhysicsBasedPredictor:
             if np.linalg.norm(v1) > 0 and np.linalg.norm(v2) > 0:
                 angle_rad = calculate_vector_angle_3d(v1, v2)
                 angle_deg = np.degrees(angle_rad)
-                # Penalize sharp turns
-                turning_energy_wh = config.TURN_ENERGY_FACTOR * angle_deg
+                turning_energy_wh = TURN_ENERGY_FACTOR * angle_deg
 
         total_energy = potential_energy_wh + horizontal_energy_wh + turning_energy_wh
         return predicted_time, total_energy
@@ -112,7 +111,7 @@ class EnergyTimePredictor:
         wind_speed = np.linalg.norm(wind_vector)
         flight_vector = np.array(p2) - np.array(p1)
         
-        wind_alignment = 0.0 # Default value
+        wind_alignment = 0.0
         flight_vector_norm = np.linalg.norm(flight_vector)
         wind_vector_norm = np.linalg.norm(wind_vector)
         if flight_vector_norm > 1e-6 and wind_vector_norm > 1e-6:

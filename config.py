@@ -1,4 +1,6 @@
-# config.py (Complete and Corrected)
+# ==============================================================================
+# File: config.py
+# ==============================================================================
 """Central configuration file for the Q-DOP project."""
 import warnings
 
@@ -51,6 +53,10 @@ DRONE_MASS_KG = 2.0
 ASCENT_EFFICIENCY = 0.7
 GRAVITY = 9.81
 TURN_ENERGY_FACTOR = 0.005  # Energy cost per degree of turn
+# FIX: Moved physics "magic numbers" to config for better tuning and realism
+DRONE_BASE_POWER_WATTS = 50.0
+DRONE_ADDITIONAL_WATTS_PER_KG = 10.0
+
 
 # --- Pathfinding Parameters ---
 A_STAR_HEURISTIC_WEIGHT = 1.2  # Heuristic weight (1.0 = optimal, >1.0 = faster but suboptimal)

@@ -1,11 +1,15 @@
-
+# ==============================================================================
+# File: environment.py
+# ==============================================================================
 import numpy as np
 from dataclasses import dataclass
 from typing import Tuple, List, Dict
 from opensimplex import OpenSimplex
 from rtree import index
-import config
 import logging
+
+# Assuming these are imported from a single config file
+from config import AREA_BOUNDS, MIN_ALTITUDE, MAX_ALTITUDE, NO_FLY_ZONES
 from utils.geometry import line_segment_intersects_aabb
 
 @dataclass
@@ -43,7 +47,7 @@ class WeatherSystem:
 
 class Environment:
     def __init__(self, weather_system: WeatherSystem):
-        self.static_nfzs = config.NO_FLY_ZONES
+        self.static_nfzs = NO_FLY_ZONES
         self.weather: WeatherSystem = weather_system
         self.dynamic_nfzs: List[Dict] = []
         self.event_triggered = False
@@ -78,8 +82,8 @@ class Environment:
         
         num_buildings = 20
         for i in range(num_buildings):
-            center_x = np.random.uniform(config.AREA_BOUNDS[0], config.AREA_BOUNDS[2])
-            center_y = np.random.uniform(config.AREA_BOUNDS[1], config.AREA_BOUNDS[3])
+            center_x = np.random.uniform(AREA_BOUNDS[0], AREA_BOUNDS[2])
+            center_y = np.random.uniform(AREA_BOUNDS[1], AREA_BOUNDS[3])
             
             width = np.random.uniform(0.001, 0.003)
             height_building = np.random.uniform(0.001, 0.003)
@@ -106,7 +110,7 @@ class Environment:
     def _index_static_nfzs(self):
         """Add static no-fly zones to the spatial index."""
         for zone in self.static_nfzs:
-            bounds = (zone[0], zone[1], 0, zone[2], zone[3], config.MAX_ALTITUDE)
+            bounds = (zone[0], zone[1], 0, zone[2], zone[3], MAX_ALTITUDE)
             self._add_obstacle_to_index(bounds)
 
     def get_all_nfzs(self) -> List[List[float]]:
@@ -125,10 +129,13 @@ class Environment:
         
     def remove_dynamic_obstacles(self):
         """Removes all dynamic obstacles from the R-tree and clears state."""
-        logging.info(f"Clearing {len(self.dynamic_nfzs)} dynamic obstacles.")
+        if not self.dynamic_nfzs:
+            return
+        logging.info(f"Clearing {len(self.dynamic_nfzs)} dynamic obstacles from environment and spatial index.")
         for d_nfz in self.dynamic_nfzs:
             obs_id = d_nfz['id']
             bounds = d_nfz['bounds']
+            # Critical: Delete from the R-tree index
             self.obstacle_index.delete(obs_id, bounds)
             if obs_id in self.obstacles:
                 del self.obstacles[obs_id]
@@ -142,9 +149,9 @@ class Environment:
         x, y, z = point
         
         # Check bounds first
-        if not (config.AREA_BOUNDS[0] <= x <= config.AREA_BOUNDS[2] and
-                config.AREA_BOUNDS[1] <= y <= config.AREA_BOUNDS[3] and
-                config.MIN_ALTITUDE <= z <= config.MAX_ALTITUDE):
+        if not (AREA_BOUNDS[0] <= x <= AREA_BOUNDS[2] and
+                AREA_BOUNDS[1] <= y <= AREA_BOUNDS[3] and
+                MIN_ALTITUDE <= z <= MAX_ALTITUDE):
             return True
         
         # Use R-tree for fast spatial query
@@ -177,10 +184,11 @@ class Environment:
         """Update the environment state (weather, dynamic obstacles)."""
         self.weather.update_weather(time_step)
         
-        if simulation_time > 120 and not self.event_triggered:
+        # Using a lower time for easier testing
+        if simulation_time > 30 and not self.event_triggered:
             logging.info("EVENT: New No-Fly Zone activated!")
-            zone = [-74.005, 40.74, -73.995, 40.75]
-            bounds = (zone[0], zone[1], 0, zone[2], zone[3], config.MAX_ALTITUDE)
+            zone = [-74.005, 40.72, -73.995, 40.73] 
+            bounds = (zone[0], zone[1], 0, zone[2], zone[3], MAX_ALTITUDE)
             obs_id = self._add_obstacle_to_index(bounds)
             self.dynamic_nfzs.append({'zone': zone, 'bounds': bounds, 'id': obs_id})
             
