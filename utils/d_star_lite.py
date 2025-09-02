@@ -7,6 +7,7 @@ from collections import defaultdict
 from itertools import product
 import logging
 from typing import TYPE_CHECKING
+from utils.coordinate_manager import CoordinateManager
 
 if TYPE_CHECKING:
     from utils.coordinate_manager import CoordinateManager
