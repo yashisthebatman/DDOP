@@ -1,108 +1,60 @@
-# ==============================================================================
-# File: utils/heuristics.py
-# ==============================================================================
 import numpy as np
-from typing import Tuple, TYPE_CHECKING
-from abc import ABC, abstractmethod
+from typing import Tuple, Callable, TYPE_CHECKING
+from config import A_STAR_HEURISTIC_WEIGHT, DRONE_SPEED_MPS
 
-from config import (
-    A_STAR_HEURISTIC_WEIGHT, DEFAULT_CELL_COST, DRONE_MASS_KG, GRAVITY,
-    ASCENT_EFFICIENCY, DRONE_BATTERY_WH, DRONE_SPEED_MPS
-)
-
-# Use TYPE_CHECKING to avoid circular import errors
 if TYPE_CHECKING:
-    from path_planner import PathPlanner3D
+    from utils.coordinate_manager import CoordinateManager
 
+WorldCoord = Tuple[float, float, float]
 GridCoord = Tuple[int, int, int]
 
-class Heuristic(ABC):
-    def __init__(self, planner: 'PathPlanner3D'):
-        self.planner = planner
-        self.payload_kg = 0.0
-        self.goal = (0, 0, 0)
-        self.weight = A_STAR_HEURISTIC_WEIGHT
-        self.time_weight = 0.5
-        self.energy_weight = 0.5
+class HeuristicProvider:
+    """
+    Provides heuristic functions for different pathfinding contexts and goals.
+    This decouples the heuristic logic from the main planner.
+    """
+    def __init__(self, coord_manager: 'CoordinateManager'):
+        self.coord_manager = coord_manager
 
-    def update_params(self, payload_kg: float, goal: GridCoord, time_weight: float = 0.5, **kwargs):
-        self.payload_kg = payload_kg
-        self.goal = goal
-        self.time_weight = time_weight
-        self.energy_weight = 1.0 - time_weight
+    def get_heuristic(
+        self, mode: str, goal: WorldCoord, payload_kg: float, time_weight: float = 0.5
+    ) -> Callable[[WorldCoord, WorldCoord], float]:
+        """
+        Returns a heuristic function for the abstract graph (world coordinates).
+        The returned function MUST accept two arguments (u, v) to be compatible with NetworkX.
+        """
+        goal_np = np.array(goal)
 
-    @abstractmethod
-    def calculate(self, node: GridCoord) -> float:
-        """Calculate heuristic value from node to goal."""
-        pass
+        # FIX: The heuristic function for NetworkX A* must accept two arguments: u (current) and v (goal).
+        def time_heuristic(u: WorldCoord, v: WorldCoord) -> float:
+            """Estimates time cost as distance / speed."""
+            dist = np.linalg.norm(np.array(u) - goal_np)
+            return (dist / DRONE_SPEED_MPS) * A_STAR_HEURISTIC_WEIGHT
 
-    def cost_between(self, n1: GridCoord, n2: GridCoord) -> float:
-        """Calculate actual cost between adjacent nodes."""
-        if self.planner.is_grid_obstructed(n2):
-            return float('inf')
-            
-        cost_multiplier = self.planner.cost_map.get(n2, DEFAULT_CELL_COST)
-        dist = np.linalg.norm(np.array(n1) - np.array(n2))
-        return dist * cost_multiplier
+        # FIX: The heuristic function signature is updated to (u, v).
+        def energy_heuristic(u: WorldCoord, v: WorldCoord) -> float:
+            """Estimates energy cost. Simplified to be proportional to distance."""
+            dist = np.linalg.norm(np.array(u) - goal_np)
+            return dist * A_STAR_HEURISTIC_WEIGHT
 
-class TimeHeuristic(Heuristic):
-    def calculate(self, node: GridCoord) -> float:
-        # Heuristic in grid space is a direct distance calculation
-        dist_grid = np.linalg.norm(np.array(node) - np.array(self.goal))
-        return dist_grid * self.weight
+        if mode == "time":
+            return time_heuristic
+        elif mode == "energy":
+            return energy_heuristic
+        else: # balanced
+            # FIX: The heuristic function signature is updated to (u, v).
+            def balanced_heuristic(u: WorldCoord, v: WorldCoord) -> float:
+                time_cost = time_heuristic(u, v)
+                energy_cost = energy_heuristic(u, v)
+                return (time_weight * time_cost + (1 - time_weight) * energy_cost)
+            return balanced_heuristic
 
-class EnergyHeuristic(Heuristic):
-    def calculate(self, node: GridCoord) -> float:
-        # Use the planner's coordinate manager for all conversions
-        node_world = self.planner.coord_manager.grid_to_world(node)
-        goal_world = self.planner.coord_manager.grid_to_world(self.goal)
-        dist_world = np.linalg.norm(np.array(goal_world) - np.array(node_world))
-        
-        # Estimate energy based on distance and potential energy change
-        base_energy = dist_world * getattr(self.planner, 'baseline_energy_per_meter', 0.01)
-        alt_change = goal_world[2] - node_world[2]
-        
-        p_energy = 0.0
-        if alt_change > 0:
-            total_mass = DRONE_MASS_KG + self.payload_kg
-            joules = (total_mass * GRAVITY * alt_change) / ASCENT_EFFICIENCY
-            p_energy = joules / 3600 # Convert Joules to Watt-hours
-
-        return self.weight * (base_energy + p_energy)
-
-class BalancedHeuristic(Heuristic):
-    def __init__(self, planner: 'PathPlanner3D'):
-        super().__init__(planner)
-        self.time_h = TimeHeuristic(planner)
-        self.energy_h = EnergyHeuristic(planner)
-        self.max_time_est = 3600  # Default, will be updated dynamically
-        self.max_energy_est = DRONE_BATTERY_WH # Default, will be updated dynamically
-
-    def update_params(self, payload_kg: float, goal: GridCoord, time_weight: float = 0.5, **kwargs):
-        super().update_params(payload_kg, goal, time_weight)
-        self.time_h.update_params(payload_kg, goal, time_weight)
-        self.energy_h.update_params(payload_kg, goal, time_weight)
-        
-        # Implement dynamic normalization based on the mission segment scale
-        start_node = kwargs.get('start_node')
-        if start_node:
-            start_world = self.planner.coord_manager.grid_to_world(start_node)
-            goal_world = self.planner.coord_manager.grid_to_world(goal)
-            dist_world = np.linalg.norm(np.array(start_world) - np.array(goal_world))
-            
-            # Estimate max time with a 1.5x detour factor
-            self.max_time_est = max(1.0, (dist_world / DRONE_SPEED_MPS) * 1.5)
-            
-            # Estimate max energy as a fraction of battery based on distance
-            # A more robust estimation could be based on a simplified physics model
-            est_joules = (DRONE_MASS_KG + payload_kg) * 9.81 * dist_world
-            est_wh = (est_joules / 3600) * 1.5 # 1.5x factor for inefficiency and horizontal flight
-            self.max_energy_est = max(1.0, est_wh)
-
-    def calculate(self, node: GridCoord) -> float:
-        # Normalize time and energy costs to make them comparable
-        time_cost = self.time_h.calculate(node) / self.max_time_est
-        energy_cost = self.energy_h.calculate(node) / self.max_energy_est
-        
-        combined_cost = (self.time_weight * time_cost + self.energy_weight * energy_cost)
-        return combined_cost * self.weight
+    def get_grid_heuristic(self, goal: GridCoord) -> Callable[[GridCoord], float]:
+        """
+        Returns a simple Euclidean distance heuristic for grid-based algorithms like D* Lite.
+        This heuristic correctly takes only one argument (the current node).
+        """
+        goal_np = np.array(goal)
+        def heuristic(node: GridCoord) -> float:
+            return np.linalg.norm(np.array(node) - goal_np)
+        return heuristic
