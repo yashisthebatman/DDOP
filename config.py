@@ -11,8 +11,13 @@ TAKEOFF_ALTITUDE = 15.0  # meters
 GRID_RESOLUTION_M = 15 # Horizontal resolution (in meters) for the D* Lite grid
 GRID_VERTICAL_RESOLUTION_M = 5 # Vertical resolution (in meters) for the D* Lite grid
 
+# --- RRT* Strategic Planner ---
+RRT_ITERATIONS = 2500       # Number of nodes to try
+RRT_STEP_SIZE_METERS = 150.0  # How far to extend the tree in one step (in meters)
+RRT_GOAL_BIAS = 0.1         # Probability of sampling the goal point (0.0 to 1.0)
+RRT_NEIGHBORHOOD_RADIUS_METERS = 200.0 # Radius to search for rewiring (in meters)
+
 # --- Hub Locations & Destinations ---
-# ... (unchanged)
 HUBS = {
     "Hub A (South Manhattan)": (-74.013, 40.705, 10.0),
     "Hub B (Midtown East)": (-73.975, 40.738, 10.0),
@@ -32,14 +37,12 @@ DESTINATIONS = {
 }
 
 # --- No-Fly Zones (Static Obstacles) ---
-# ... (unchanged)
 NO_FLY_ZONES = [
     [-74.01, 40.715, -73.995, 40.725],
     [-73.985, 40.73, -73.975, 40.74]
 ]
 
 # --- Drone & Physics ---
-# ... (unchanged)
 DRONE_SPEED_MPS = 20.0
 DRONE_VERTICAL_SPEED_MPS = 5.0
 DRONE_MAX_PAYLOAD_KG = 5.0
@@ -52,11 +55,10 @@ DRONE_BASE_POWER_WATTS = 50.0
 DRONE_ADDITIONAL_WATTS_PER_KG = 10.0
 
 # --- Pathfinding Parameters ---
-A_STAR_HEURISTIC_WEIGHT = 1.2
+A_STAR_HEURISTIC_WEIGHT = 1.2 # This is now unused but kept for reference
 MAX_PATH_LENGTH = 5000
 
 # --- Configuration Validation ---
-# ... (unchanged)
 def validate_coordinates():
     lon_min, lat_min, lon_max, lat_max = AREA_BOUNDS
     all_points = {**HUBS, **DESTINATIONS}

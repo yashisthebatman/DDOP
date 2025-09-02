@@ -3,7 +3,6 @@ from collections import defaultdict
 from itertools import product
 import logging
 from typing import TYPE_CHECKING, Dict, Optional, List, Tuple
-# FIX: Add the missing numpy import. This resolves the NameError.
 import numpy as np
 
 if TYPE_CHECKING:
@@ -18,19 +17,14 @@ class DStarLite:
         self.heuristic = heuristic_provider.get_grid_heuristic(goal)
         self.coord_manager = coord_manager
         self.mode = mode
-
         self.g_score = defaultdict(lambda: float('inf'))
         self.rhs_score = defaultdict(lambda: float('inf'))
         self.open_set = []
         self.open_set_map = {}
-        
         self.km = 0
         self.last_start = start
+        self.MOVES = [move for move in product([-1, 0, 1], repeat=3) if move != (0, 0, 0)]
         
-        moves = list(product([-1, 0, 1], repeat=3))
-        moves.remove((0, 0, 0))
-        self.MOVES = moves
-
         self.rhs_score[self.goal] = 0
         key = self._calculate_key(self.goal)
         heapq.heappush(self.open_set, (key, self.goal))
@@ -41,36 +35,30 @@ class DStarLite:
         min_score = min(self.g_score[node], self.rhs_score[node])
         return (min_score + h + self.km, min_score)
 
-    def _get_successors(self, node):
-        successors = []
-        x, y, z = node
+    def _get_successors(self, node: Tuple) -> List[Tuple]:
+        """Gets all valid neighboring nodes."""
         for dx, dy, dz in self.MOVES:
-            successor = (x + dx, y + dy, z + dz)
+            successor = (node[0] + dx, node[1] + dy, node[2] + dz)
             if self.coord_manager.is_valid_local_grid_pos(successor):
-                successors.append(successor)
-        return successors
+                yield successor
 
-    def _get_predecessors(self, node):
-        predecessors = []
-        x, y, z = node
+    def _get_predecessors(self, node: Tuple) -> List[Tuple]:
+        """Gets all valid nodes that could lead to the current node."""
         for dx, dy, dz in self.MOVES:
-            predecessor = (x - dx, y - dy, z - dz)
+            predecessor = (node[0] - dx, node[1] - dy, node[2] - dz)
             if self.coord_manager.is_valid_local_grid_pos(predecessor):
-                predecessors.append(predecessor)
-        return predecessors
+                yield predecessor
 
     def _update_node(self, node):
         if node != self.goal:
-            min_rhs = float('inf')
-            for s_node in self._get_successors(node):
-                cost = self._cost_between(node, s_node)
-                min_rhs = min(min_rhs, cost + self.g_score[s_node])
-            self.rhs_score[node] = min_rhs
-
+            self.rhs_score[node] = min(
+                (self._cost_between(node, s) + self.g_score[s] for s in self._get_successors(node)),
+                default=float('inf')
+            )
+        
         if node in self.open_set_map:
-            key_to_remove = self.open_set_map.pop(node)
-            self.open_set = [item for item in self.open_set if item != (key_to_remove, node)]
-            heapq.heapify(self.open_set)
+            # Node is in the queue, we can remove it logically by just popping from map
+            self.open_set_map.pop(node)
 
         if self.g_score[node] != self.rhs_score[node]:
             key = self._calculate_key(node)
@@ -78,23 +66,19 @@ class DStarLite:
             self.open_set_map[node] = key
 
     def compute_shortest_path(self):
-        max_iterations = 20000 
-        iterations = 0
-        
-        while self.open_set and iterations < max_iterations:
-            if not self.open_set: break
+        max_iterations = 30000
+        while self.open_set and max_iterations > 0:
+            max_iterations -= 1
+            top_key = self.open_set[0][0]
             start_key = self._calculate_key(self.start)
-            top_key, _ = self.open_set[0]
-
-            if top_key >= start_key and self.rhs_score[self.start] == self.g_score[self.start]:
-                break
-
-            iterations += 1
-            key, current = heapq.heappop(self.open_set)
-
-            if current not in self.open_set_map or self.open_set_map[current] != key:
-                continue
             
+            if top_key >= start_key and self.rhs_score[self.start] == self.g_score[self.start]:
+                return
+            
+            key, current = heapq.heappop(self.open_set)
+            
+            if current not in self.open_set_map or self.open_set_map[current] != key:
+                continue # Stale entry
             del self.open_set_map[current]
 
             if self.g_score[current] > self.rhs_score[current]:
@@ -106,10 +90,7 @@ class DStarLite:
                 self._update_node(current)
                 for p_node in self._get_predecessors(current):
                     self._update_node(p_node)
-        
-        if iterations >= max_iterations:
-            logging.warning("D* Lite reached max iterations.")
-            
+
     def update_and_replan(self, new_start, cost_updates):
         self.last_start = self.start
         self.start = new_start
@@ -119,41 +100,29 @@ class DStarLite:
             self.cost_map[cell] = float('inf')
             self._update_node(cell)
             for pred in self._get_predecessors(cell):
-                 self._update_node(pred)
-        return self.compute_shortest_path()
+                self._update_node(pred)
+        self.compute_shortest_path()
 
     def get_path(self) -> Optional[List[Tuple]]:
         if self.g_score[self.start] == float('inf'):
             return None
-        
         path = [self.start]
         current = self.start
-        max_path_len = self.coord_manager.grid_shape[0] * self.coord_manager.grid_shape[1] * self.coord_manager.grid_shape[2]
+        max_path_len = self.coord_manager.grid_width * self.coord_manager.grid_height * 2
         
         while current != self.goal:
-            min_cost = float('inf')
-            next_node = None
+            if len(path) > max_path_len: return None # Safety break
             
-            for successor in self._get_successors(current):
-                cost = self._cost_between(current, successor) + self.g_score[successor]
-                if cost < min_cost:
-                    min_cost = cost
-                    next_node = successor
-            
-            if next_node is None:
-                logging.error("D* Lite path reconstruction failed: no valid successor found.")
-                return None
+            next_node = min(
+                self._get_successors(current),
+                key=lambda s: self._cost_between(current, s) + self.g_score[s],
+                default=None
+            )
+            if next_node is None: return None
             
             current = next_node
             path.append(current)
-            
-            if len(path) > max_path_len:
-                logging.error("D* Lite path reconstruction exceeded safety limit.")
-                return None
-        
         return path
 
     def _cost_between(self, n1: Tuple, n2: Tuple) -> float:
-        if n2 in self.cost_map:
-            return self.cost_map[n2]
-        return np.linalg.norm(np.array(n1) - np.array(n2))
+        return self.cost_map.get(n2, np.linalg.norm(np.array(n1) - np.array(n2)))
