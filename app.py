@@ -183,5 +183,10 @@ def main():
 
 if __name__ == "__main__":
     st.set_page_config(layout="wide", page_title="Q-DOP Planner")
+    
+    # FIX: Initialize the log in the session state before it's accessed.
+    if 'log' not in st.session_state:
+        st.session_state.log = []
+
     planner = load_planner()
     main()
