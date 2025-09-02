@@ -1,14 +1,22 @@
+# ==============================================================================
+# File: app.py
+# ==============================================================================
 import streamlit as st
 import plotly.graph_objects as go
-import numpy as np
 import time
 import pandas as pd
+# --- (Import all other required classes from your project) ---
+# Assuming all other files are in the correct directory structure
+from config import *
+from utils.geometry import *
+from utils.coordinate_manager import *
+from utils.heuristics import *
+from utils.rrt_star import *
+from utils.d_star_lite import *
+from environment import *
+from ml_predictor.predictor import *
+from path_planner import *
 
-# Import classes and constants from the project
-from environment import Environment, WeatherSystem
-from path_planner import PathPlanner3D
-from ml_predictor.predictor import EnergyTimePredictor
-from config import HUBS, DESTINATIONS, DRONE_MAX_PAYLOAD_KG, DRONE_BATTERY_WH, TAKEOFF_ALTITUDE, MAX_ALTITUDE
 
 def initialize_state():
     defaults = {
@@ -65,7 +73,9 @@ def calculate_mission_summary(path, payload):
     total_time, total_energy = 0, 0
     for i in range(len(path) - 1):
         p_prev = path[i-1] if i > 0 else None
-        t, e = planner.predictor.predict(path[i], path[i+1], payload, np.array([0,0,0]), p_prev)
+        # Use a simplified wind vector for summary calculation
+        wind_vector = planner.env.weather.get_wind_at_location(path[i][0], path[i][1])
+        t, e = planner.predictor.predict(path[i], path[i+1], payload, wind_vector, p_prev)
         total_time += t; total_energy += e
     return total_time, total_energy
 
@@ -73,7 +83,8 @@ def setup_stage():
     st.header("1. Mission Parameters")
     c1, c2 = st.columns(2)
     with c1:
-        st.session_state.hub_location = HUBS[st.selectbox("Select Hub", list(HUBS.keys()))]
+        hub_name = st.selectbox("Select Hub", list(HUBS.keys()))
+        st.session_state.hub_location = HUBS[hub_name]
         st.session_state.destination_choice = st.selectbox("Select Destination", list(DESTINATIONS.keys()))
     with c2: st.session_state.payload_kg = st.slider("Payload (kg)", 0.1, DRONE_MAX_PAYLOAD_KG, 1.5, 0.1)
     st.subheader("2. Optimization Priority")
@@ -94,7 +105,10 @@ def planning_stage():
         )
         if path is None:
             st.error(f"Path planning failed: {status}"); st.button("New Mission", on_click=reset_mission_state); return
+        
+        # The path from RRT* starts at the first waypoint *after* takeoff. Prepend the start position.
         full_path = [(hub[0], hub[1], TAKEOFF_ALTITUDE)] + path
+        
         pred_time, pred_energy = calculate_mission_summary(full_path, payload)
         st.session_state.update({
             'initial_payload': payload, 'predicted_time': pred_time, 'predicted_energy': pred_energy,
@@ -139,14 +153,30 @@ def simulation_stage():
 
 def main():
     """Main application loop and state machine."""
-    if st.session_state.stage == 'setup': setup_stage()
-    elif st.session_state.stage == 'planning': planning_stage()
-    elif st.session_state.stage == 'simulation': simulation_stage()
+    st.set_page_config(layout="wide", page_title="Hybrid Drone Path Planner")
+    st.title("🚁 Hybrid RRT*/D* Lite Drone Mission Planner")
 
-    if st.session_state.mission_running:
-        planner.env.update_environment(st.session_state.total_time, time_step=0.1)
+    if 'stage' not in st.session_state:
+        initialize_state()
+        
+    if st.session_state.stage == 'setup': 
+        setup_stage()
+    elif st.session_state.stage == 'planning': 
+        planning_stage()
+    elif st.session_state.stage == 'simulation': 
+        simulation_stage()
 
+    # ==========================================================================
+    # --- START: CORE SIMULATION AND REPLANNING LOOP (MAJOR ADDITION/FIX) ---
+    # ==========================================================================
+    if 'mission_running' in st.session_state and st.session_state.mission_running:
+        # 1. Update environment (weather, dynamic obstacles)
+        time_step_sim = 0.5 # A discrete time step for simulation logic
+        planner.env.update_environment(st.session_state.total_time, time_step=time_step_sim)
+
+        # 2. Check for replanning triggers
         if check_replanning_triggers():
+            st.session_state.mission_running = False # Pause simulation during replan
             with st.spinner("Obstacle detected! Performing hybrid replan..."):
                 stale_path_from_drone = st.session_state.planned_path[st.session_state.path_index:]
                 
@@ -159,6 +189,66 @@ def main():
             if new_path_from_drone:
                 log_event(f"✅ Replan successful! New path generated. ({status})")
                 
-                # --- FIX IS HERE ---
-                # Construct the new full path to keep history for predictions.
-                path_traveled = st.session_state.planned_path[
+                # The path segments *before* the current drone position
+                path_traveled = st.session_state.planned_path[:st.session_state.path_index]
+                
+                # Combine the already traveled path with the new detour path
+                new_full_path = path_traveled + new_path_from_drone
+                
+                st.session_state.planned_path = new_full_path
+                st.session_state.planned_path_np = np.array(new_full_path)
+                
+                # --- BUG FIX: Correctly set the path index ---
+                # The new index is the length of the already traveled segment, which points
+                # to the drone's current position at the start of the new path segment.
+                # Old (buggy) code: st.session_state.path_index = len(path_traveled) - 1
+                st.session_state.path_index = len(path_traveled)
+                
+                # Re-calculate mission summary with the new path
+                rem_path = new_full_path[st.session_state.path_index:]
+                rem_time, rem_energy = calculate_mission_summary(rem_path, st.session_state.initial_payload)
+                st.session_state.predicted_time = st.session_state.total_time + rem_time
+                st.session_state.predicted_energy = st.session_state.total_energy + rem_energy
+                log_event("Mission summary updated for new route.")
+
+            else:
+                log_event(f"❌ Replan FAILED: {status}. Mission paused.")
+                st.error(f"Replan failed: {status}")
+
+            planner.env.was_nfz_just_added = False # Reset the trigger
+            st.session_state.mission_running = True # Resume simulation
+        
+        # 3. Advance drone along the path if no replanning occurred
+        path = st.session_state.planned_path
+        if path and st.session_state.path_index < len(path) - 1:
+            p_current = path[st.session_state.path_index]
+            p_next = path[st.session_state.path_index + 1]
+            p_prev = path[st.session_state.path_index - 1] if st.session_state.path_index > 0 else None
+            
+            wind = planner.env.weather.get_wind_at_location(p_current[0], p_current[1])
+            time_for_leg, energy_for_leg = planner.predictor.predict(
+                p_current, p_next, st.session_state.initial_payload, wind, p_prev
+            )
+            
+            # Update mission state
+            st.session_state.total_time += time_for_leg
+            st.session_state.total_energy += energy_for_leg
+            st.session_state.path_index += 1
+            st.session_state.drone_pos = path[st.session_state.path_index]
+            log_event(f"Moved to waypoint {st.session_state.path_index}/{len(path)-1}. Leg Time: {time_for_leg:.1f}s")
+        else:
+            # Reached the end of the path
+            st.session_state.mission_running = False
+
+        # 4. Control simulation speed and refresh the UI
+        time.sleep(0.2) # UI refresh rate
+        st.rerun()
+    # ==========================================================================
+    # --- END: CORE SIMULATION AND REPLANNING LOOP ---
+    # ==========================================================================
+
+
+if __name__ == '__main__':
+    # The planner is loaded once and cached by Streamlit
+    planner = load_planner()
+    main()

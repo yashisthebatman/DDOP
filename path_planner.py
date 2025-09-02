@@ -1,14 +1,17 @@
-import logging
-from typing import List, Optional, Tuple
-import numpy as np
+# ==============================================================================
+# File: path_planner.py
+# ==============================================================================
+import logging ## FIX: Added logging
+from typing import Tuple, List, Optional
 
-from utils.rrt_star import RRTStar
-from utils.d_star_lite import DStarLite
+from environment import Environment # For type hinting
+from ml_predictor.predictor import EnergyTimePredictor # For type hinting
 from utils.coordinate_manager import CoordinateManager
-from utils.heuristics import HeuristicProvider
+from utils.d_star_lite import DStarLite
 from utils.geometry import point_in_aabb
-from environment import Environment
-from ml_predictor.predictor import EnergyTimePredictor
+from utils.heuristics import HeuristicProvider
+from utils.rrt_star import RRTStar
+
 
 class PathPlanner3D:
     def __init__(self, env: Environment, predictor: EnergyTimePredictor):
@@ -27,6 +30,7 @@ class PathPlanner3D:
         if not path:
             return None, status
         
+        # The path from RRT* includes the start point. The app expects the path *after* the start.
         return path[1:], status
 
     def perform_hybrid_replan(self, current_pos: Tuple, stale_path: List[Tuple], new_obstacle_bounds: Tuple) -> Tuple[Optional[List[Tuple]], str]:
@@ -34,17 +38,24 @@ class PathPlanner3D:
         
         tactical_goal = None
         remaining_path_index = -1
-        for i, waypoint in enumerate(stale_path):
+        
+        ## FIX: Logic bug in finding tactical goal.
+        ## The original loop started at index 0 of the stale path. Since the first point is the
+        ## drone's current position (which is safe), it would immediately select itself as the
+        ## tactical goal and break, failing to find a proper escape waypoint.
+        ## The fix is to start iterating from the *next* waypoint in the path (index 1).
+        logging.debug(f"Searching for tactical goal in stale path: {stale_path}")
+        for i, waypoint in enumerate(stale_path[1:], start=1):
             if not point_in_aabb(waypoint, new_obstacle_bounds):
                 tactical_goal = waypoint
                 remaining_path_index = i
+                logging.info(f"Safe tactical goal found at index {i}: {waypoint}")
                 break
         
         if tactical_goal is None:
+            logging.error("Drone is trapped. No safe waypoint found on the original path to replan towards.")
             return None, "Fatal: Drone is trapped. No safe waypoint found on the original path."
         
-        logging.info(f"Tactical goal identified on old path: {tactical_goal}")
-
         detour_path, status = self._find_tactical_detour(current_pos, tactical_goal, new_obstacle_bounds)
         
         if not detour_path:
@@ -52,12 +63,11 @@ class PathPlanner3D:
         
         logging.info(f"D* Lite detour found with {len(detour_path)} waypoints.")
 
-        # FIX: Correctly stitch the path together.
-        # The remainder of the old path starts *at* the tactical goal.
+        # The rest of the original path, starting from the tactical goal
         remaining_stale_path = stale_path[remaining_path_index:]
         
-        # The new path is the detour (which ends at the tactical goal), minus its last
-        # element to avoid duplication, plus the rest of the old path.
+        # The detour path from D* already includes the start (current_pos) and end (tactical_goal).
+        # We want to stitch the detour (without its last point) to the remaining stale path.
         full_new_path = detour_path[:-1] + remaining_stale_path
         
         logging.info("--- Hybrid Replan Successful ---")
@@ -68,17 +78,27 @@ class PathPlanner3D:
         grid_start = self.coord_manager.world_to_local_grid(start_pos)
         grid_goal = self.coord_manager.world_to_local_grid(end_pos)
         
-        if not grid_start or not grid_goal:
-            return None, "Start or end of tactical path is outside the local grid."
+        if not grid_start:
+            return None, f"Tactical Start {start_pos} is outside the local grid."
+        if not grid_goal:
+            return None, f"Tactical Goal {end_pos} is outside the local grid."
 
         cost_map = {}
         min_g = self.coord_manager.world_to_local_grid((new_obstacle_bounds[0], new_obstacle_bounds[1], new_obstacle_bounds[2]))
         max_g = self.coord_manager.world_to_local_grid((new_obstacle_bounds[3], new_obstacle_bounds[4], new_obstacle_bounds[5]))
+        
         if min_g and max_g:
-            for x in range(min(min_g[0], max_g[0]), max(min_g[0], max_g[0]) + 1):
-                for y in range(min(min_g[1], max_g[1]), max(min_g[1], max_g[1]) + 1):
-                    for z in range(min(min_g[2], max_g[2]), max(min_g[2], max_g[2]) + 1):
-                        if self.coord_manager.is_valid_local_grid_pos((x,y,z)): cost_map[(x,y,z)] = float('inf')
+            logging.debug(f"Populating cost map for obstacle between grid points {min_g} and {max_g}")
+            # Ensure ranges are correct regardless of min/max order
+            x_range = range(min(min_g[0], max_g[0]), max(min_g[0], max_g[0]) + 1)
+            y_range = range(min(min_g[1], max_g[1]), max(min_g[1], max_g[1]) + 1)
+            z_range = range(min(min_g[2], max_g[2]), max(min_g[2], max_g[2]) + 1)
+            for x in x_range:
+                for y in y_range:
+                    for z in z_range:
+                        grid_cell = (x, y, z)
+                        if self.coord_manager.is_valid_local_grid_pos(grid_cell):
+                             cost_map[grid_cell] = float('inf')
         
         dstar = DStarLite(start=grid_start, goal=grid_goal, cost_map=cost_map, heuristic_provider=self.heuristics, coord_manager=self.coord_manager, mode='time')
         dstar.compute_shortest_path()
