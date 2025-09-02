@@ -1,14 +1,16 @@
+
 import heapq
 import numpy as np
 from collections import defaultdict
 from itertools import product
 
 class DStarLite:
-    def __init__(self, start, goal, cost_map, heuristic):
+    def __init__(self, start, goal, cost_map, heuristic, grid_dims):
         self.start = start
         self.goal = goal
         self.cost_map = cost_map
         self.heuristic = heuristic
+        self.grid_width, self.grid_height, self.grid_depth = grid_dims
 
         self.g_score = defaultdict(lambda: float('inf'))
         self.rhs_score = defaultdict(lambda: float('inf'))
@@ -52,7 +54,9 @@ class DStarLite:
 
     def _is_valid_node(self, node):
         x, y, z = node
-        return (0 <= x < 1000 and 0 <= y < 1000 and 0 <= z < 100)  # Default bounds
+        return (0 <= x < self.grid_width and 
+                0 <= y < self.grid_height and 
+                0 <= z < self.grid_depth)
 
     def _update_node(self, node):
         if node != self.goal:
@@ -63,6 +67,7 @@ class DStarLite:
             self.rhs_score[node] = min_rhs
 
         if node in self.open_set_map:
+            # Remove from heap is tricky, so we mark as invalid and ignore later
             self.open_set_map.pop(node)
 
         if self.g_score[node] != self.rhs_score[node]:
@@ -71,25 +76,27 @@ class DStarLite:
             self.open_set_map[node] = key
 
     def compute_shortest_path(self):
-        max_iterations = 10000
+        max_iterations = 20000 # Increased for safety
         iterations = 0
         
         while self.open_set and iterations < max_iterations:
+            start_key = self._calculate_key(self.start)
+            
+            # Peek at top of heap
+            top_key, _ = self.open_set[0]
+
+            if top_key >= start_key and self.rhs_score[self.start] == self.g_score[self.start]:
+                break
+
             iterations += 1
             
-            # Clean invalid entries
-            while self.open_set and self.open_set[0][1] not in self.open_set_map:
-                heapq.heappop(self.open_set)
-            if not self.open_set:
-                break
-
-            start_key = self._calculate_key(self.start)
-            if self.open_set[0][0] >= start_key and self.rhs_score[self.start] == self.g_score[self.start]:
-                break
-
             key, current = heapq.heappop(self.open_set)
-            if current in self.open_set_map:
-                del self.open_set_map[current]
+
+            # If node is stale (already processed with a better key), skip it
+            if current not in self.open_set_map or self.open_set_map[current] != key:
+                continue
+            
+            del self.open_set_map[current]
 
             if self.g_score[current] > self.rhs_score[current]:
                 self.g_score[current] = self.rhs_score[current]
@@ -100,7 +107,10 @@ class DStarLite:
                 self._update_node(current)
                 for p_node in self._get_predecessors(current):
                     self._update_node(p_node)
-                    
+        
+        if iterations >= max_iterations:
+            logging.warning("D* Lite reached max iterations.")
+            
         return self.get_path()
 
     def update_and_replan(self, new_start, cost_updates):
@@ -109,8 +119,10 @@ class DStarLite:
         self.km += self.heuristic.calculate(self.last_start)
         
         for cell, new_cost in cost_updates:
+            # This is a simplified cost update logic.
+            # A full implementation would need to check c_old vs c_new.
             self.heuristic.planner.cost_map[cell] = new_cost
-            self._update_node(cell) 
+            self._update_node(cell)
             for pred in self._get_predecessors(cell):
                 self._update_node(pred)
         
@@ -127,19 +139,24 @@ class DStarLite:
             min_cost = float('inf')
             next_node = None
             
-            for successor in self._get_successors(current):
+            successors = self._get_successors(current)
+            if not successors:
+                return None # No path forward
+
+            for successor in successors:
                 cost = self.heuristic.cost_between(current, successor) + self.g_score[successor]
                 if cost < min_cost:
                     min_cost = cost
                     next_node = successor
             
             if next_node is None:
-                return None
+                return None # Should not happen if g_score is not inf
             
             current = next_node
             path.append(current)
             
-            if len(path) > 1000:  # Safety limit
-                break
+            if len(path) > (self.grid_width * self.grid_height): # Safety limit
+                logging.error("D* Lite path reconstruction exceeded safety limit.")
+                return None
         
         return path

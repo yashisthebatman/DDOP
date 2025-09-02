@@ -3,7 +3,6 @@ import os
 import sys
 import joblib
 import logging
-import pandas as pd
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
@@ -12,46 +11,64 @@ import config
 from utils.geometry import calculate_distance_3d, calculate_vector_angle_3d, calculate_wind_effect
 
 class PhysicsBasedPredictor:
-    """Physics-based model for energy and time prediction."""
+    """
+    Physics-based model for energy and time prediction.
+    This version includes a more realistic time model that differentiates
+    between fast horizontal travel and slower vertical travel.
+    """
     
     def predict(self, p1, p2, payload_kg, wind_vector, p_prev=None):
-        distance_3d = calculate_distance_3d(p1, p2)
-        if distance_3d == 0:
+        p1, p2 = np.array(p1), np.array(p2)
+        flight_vector = p2 - p1
+        distance_3d = np.linalg.norm(flight_vector)
+        
+        if distance_3d < 1e-6:
             return 0, 0
+
+        # --- Reworked Time Prediction for More Realism ---
+        horizontal_dist = np.linalg.norm([flight_vector[0], flight_vector[1]])
+        vertical_dist = abs(flight_vector[2])
+
+        horizontal_time = horizontal_dist / config.DRONE_SPEED_MPS
+        vertical_time = vertical_dist / config.DRONE_VERTICAL_SPEED_MPS # Use separate vertical speed
         
-        flight_vector = np.array(p2) - np.array(p1)
+        # Apply wind effect primarily to the horizontal component of time
         time_impact, energy_impact_factor = calculate_wind_effect(flight_vector, wind_vector, config.DRONE_SPEED_MPS)
-        
         if time_impact == float('inf'):
             return float('inf'), float('inf')
         
-        predicted_time = (distance_3d / config.DRONE_SPEED_MPS) * time_impact
+        predicted_time = (horizontal_time * time_impact) + vertical_time
+        # --- End of Time Prediction Rework ---
 
         total_mass_kg = config.DRONE_MASS_KG + payload_kg
         altitude_change = p2[2] - p1[2]
         potential_energy_wh = 0
         
         if altitude_change > 0:
+            # Energy to gain potential energy
             potential_energy_joules = (total_mass_kg * config.GRAVITY * altitude_change) / config.ASCENT_EFFICIENCY
             potential_energy_wh = potential_energy_joules / 3600
 
-        base_power = 50 + (total_mass_kg * 10)
-        horizontal_power = base_power * energy_impact_factor
+        # Energy to overcome drag and maintain lift is proportional to time spent flying
+        base_power_to_hover = 50 + (total_mass_kg * 10) 
+        horizontal_power = base_power_to_hover * energy_impact_factor
         horizontal_energy_wh = (horizontal_power * predicted_time) / 3600
         
         turning_energy_wh = 0
         if p_prev is not None:
-            v1 = np.array(p1) - np.array(p_prev)
-            v2 = np.array(p2) - np.array(p1)
+            v1 = p1 - np.array(p_prev)
+            v2 = flight_vector
             if np.linalg.norm(v1) > 0 and np.linalg.norm(v2) > 0:
-                angle = calculate_vector_angle_3d(v1, v2)
-                turning_energy_wh = config.TURN_ENERGY_FACTOR * angle
+                angle_rad = calculate_vector_angle_3d(v1, v2)
+                angle_deg = np.degrees(angle_rad)
+                # Penalize sharp turns
+                turning_energy_wh = config.TURN_ENERGY_FACTOR * angle_deg
 
         total_energy = potential_energy_wh + horizontal_energy_wh + turning_energy_wh
         return predicted_time, total_energy
 
 class EnergyTimePredictor:
-    """ML-powered predictor with physics fallback."""
+    """ML-powered predictor with a robust physics-based fallback."""
     
     def __init__(self, model_path="ml_predictor/drone_predictor_model.joblib"):
         self.models = None
@@ -72,11 +89,12 @@ class EnergyTimePredictor:
 
         try:
             features = self._extract_features(p1, p2, payload_kg, wind_vector, p_prev)
-            time_pred = self.models['time_model'].predict([features])[0]
-            energy_pred = self.models['energy_model'].predict([features])[0]
+            features_2d = np.array(features).reshape(1, -1)
+            time_pred = self.models['time_model'].predict(features_2d)[0]
+            energy_pred = self.models['energy_model'].predict(features_2d)[0]
             return max(0, time_pred), max(0, energy_pred)
         except Exception as e:
-            logging.warning(f"ML prediction failed: {e}. Using fallback.")
+            logging.warning(f"ML prediction failed: {e}. Using physics-based fallback.")
             return self.fallback_predictor.predict(p1, p2, payload_kg, wind_vector, p_prev)
 
     def predict_energy_time(self, p1, p2, payload_kg, wind_vector=None, p_prev=None):
@@ -93,17 +111,20 @@ class EnergyTimePredictor:
         
         wind_speed = np.linalg.norm(wind_vector)
         flight_vector = np.array(p2) - np.array(p1)
-        if np.linalg.norm(flight_vector) > 0:
-            wind_alignment = np.dot(wind_vector, flight_vector) / (np.linalg.norm(wind_vector) * np.linalg.norm(flight_vector))
-        else:
-            wind_alignment = 0
+        
+        wind_alignment = 0.0 # Default value
+        flight_vector_norm = np.linalg.norm(flight_vector)
+        wind_vector_norm = np.linalg.norm(wind_vector)
+        if flight_vector_norm > 1e-6 and wind_vector_norm > 1e-6:
+            wind_alignment = np.dot(wind_vector, flight_vector) / (wind_vector_norm * flight_vector_norm)
         
         turning_angle = 0
         if p_prev is not None:
             v1 = np.array(p1) - np.array(p_prev)
-            v2 = np.array(p2) - np.array(p1)
+            v2 = flight_vector
             if np.linalg.norm(v1) > 0 and np.linalg.norm(v2) > 0:
-                turning_angle = calculate_vector_angle_3d(v1, v2)
+                angle_rad = calculate_vector_angle_3d(v1, v2)
+                turning_angle = np.degrees(angle_rad)
         
         return [
             distance_3d, altitude_change, horizontal_distance, payload_kg,

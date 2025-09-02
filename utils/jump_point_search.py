@@ -1,3 +1,5 @@
+
+
 import heapq
 from itertools import product
 import numpy as np
@@ -21,7 +23,7 @@ class JumpPointSearch:
         
         # Safety limits
         self.MAX_JUMP_DEPTH = config.MAX_PATH_LENGTH
-        self.max_iterations = 10000
+        self.max_iterations = 20000
 
     def search(self):
         if self.start == self.goal:
@@ -69,11 +71,6 @@ class JumpPointSearch:
             pruned_directions = self._prune_directions(direction)
         
         for d in pruned_directions:
-            neighbor = (node[0] + d[0], node[1] + d[1], node[2] + d[2])
-            
-            if self._is_valid_position(neighbor) and not self.is_obstructed(neighbor):
-                successors.add(neighbor)
-
             jump_point = self._jump(node, d, set(), 0)
             if jump_point:
                 successors.add(jump_point)
@@ -95,13 +92,13 @@ class JumpPointSearch:
         if self._has_forced_neighbor(next_node, direction):
             return next_node
 
-        # Recursive jump for diagonal movement
+        # Diagonal jump recursion
         dx, dy, dz = direction
-        if dx != 0 and dy != 0 and dz != 0:
-            if (self._jump(next_node, (dx, 0, 0), visited.copy(), depth + 1) or
-                self._jump(next_node, (0, dy, 0), visited.copy(), depth + 1) or
-                self._jump(next_node, (0, 0, dz), visited.copy(), depth + 1)):
-                return next_node
+        if dx != 0 and dy != 0 or dx != 0 and dz != 0 or dy != 0 and dz != 0:
+            # Check for jump points in cardinal components of the diagonal move
+            if self._jump(next_node, (dx, 0, 0), visited.copy(), depth + 1): return next_node
+            if self._jump(next_node, (0, dy, 0), visited.copy(), depth + 1): return next_node
+            if self._jump(next_node, (0, 0, dz), visited.copy(), depth + 1): return next_node
 
         return self._jump(next_node, direction, visited, depth + 1)
 
@@ -112,42 +109,57 @@ class JumpPointSearch:
                 0 <= z < self.grid_shape[2])
 
     def _has_forced_neighbor(self, node, direction):
-        x, y, z = node
+        """Systematic check for forced neighbors in 3D."""
         dx, dy, dz = direction
+        x, y, z = node
+
+        # Normalize direction for checks
+        ndx = dx if dx == 0 else dx // abs(dx)
+        ndy = dy if dy == 0 else dy // abs(dy)
+        ndz = dz if dz == 0 else dz // abs(dz)
+
+        # Cardinal moves have no forced neighbors
+        if (abs(ndx) + abs(ndy) + abs(ndz)) == 1:
+            return False
+
+        # Check for obstacles that would force a turn
+        # For a move (dx, dy, dz), we look for obstacles at (x-dx, y, z), (x, y-dy, z), etc.
+        # that have an open space next to them in the direction of travel.
+
+        if ndx != 0 and ndy != 0: # Planar diagonal move on XY plane
+            if self.is_obstructed((x - ndx, y, z)) and not self.is_obstructed((x - ndx, y + ndy, z)): return True
+            if self.is_obstructed((x, y - ndy, z)) and not self.is_obstructed((x + ndx, y - ndy, z)): return True
         
-        # Simplified forced neighbor detection
-        if dx != 0:
-            for j in [-1, 1]:
-                for k in [-1, 1]:
-                    if j != dy or k != dz:
-                        check_pos = (x, y + j, z + k)
-                        if (self._is_valid_position(check_pos) and 
-                            self.is_obstructed(check_pos)):
-                            next_forced = (x + dx, y + j, z + k)
-                            if (self._is_valid_position(next_forced) and 
-                                not self.is_obstructed(next_forced)):
-                                return True
+        if ndx != 0 and ndz != 0: # Planar diagonal move on XZ plane
+            if self.is_obstructed((x - ndx, y, z)) and not self.is_obstructed((x - ndx, y, z + ndz)): return True
+            if self.is_obstructed((x, y, z - ndz)) and not self.is_obstructed((x + ndx, y, z - ndz)): return True
+
+        if ndy != 0 and ndz != 0: # Planar diagonal move on YZ plane
+            if self.is_obstructed((x, y - ndy, z)) and not self.is_obstructed((x, y - ndy, z + ndz)): return True
+            if self.is_obstructed((x, y, z - ndz)) and not self.is_obstructed((x, y + ndy, z - ndz)): return True
+
         return False
 
     def _prune_directions(self, direction):
         dx, dy, dz = direction
-        pruned = [direction]
+        pruned = {direction}
         
-        if dx != 0 and dy == 0 and dz == 0:
-            pruned.extend([(dx, -1, 0), (dx, 1, 0), (dx, 0, -1), (dx, 0, 1)])
-        elif dy != 0 and dx == 0 and dz == 0:
-            pruned.extend([(-1, dy, 0), (1, dy, 0), (0, dy, -1), (0, dy, 1)])
-        elif dz != 0 and dx == 0 and dy == 0:
-            pruned.extend([(-1, 0, dz), (1, 0, dz), (0, -1, dz), (0, 1, dz)])
-        else:
-            if dx != 0 and dy != 0:
-                pruned.extend([(dx, 0, 0), (0, dy, 0), (dx, dy, 0)])
-            if dx != 0 and dz != 0:
-                pruned.extend([(dx, 0, 0), (0, 0, dz), (dx, 0, dz)])
-            if dy != 0 and dz != 0:
-                pruned.extend([(0, dy, 0), (0, 0, dz), (0, dy, dz)])
+        # Natural neighbors
+        if dx != 0: pruned.add((dx, 0, 0))
+        if dy != 0: pruned.add((0, dy, 0))
+        if dz != 0: pruned.add((0, 0, dz))
+        if dx != 0 and dy != 0: pruned.add((dx, dy, 0))
+        if dx != 0 and dz != 0: pruned.add((dx, 0, dz))
+        if dy != 0 and dz != 0: pruned.add((0, dy, dz))
+
+        # Forced neighbors
+        if dx != 0 and dy != 0: # Moving in XY plane
+            if self.is_obstructed((direction[0], -direction[1], 0)): pruned.add((dx, -dy, 0))
+            if self.is_obstructed((-direction[0], direction[1], 0)): pruned.add((-dx, dy, 0))
         
-        return list(set(pruned))
+        # Add similar checks for XZ and YZ planes if needed for more aggressive pruning
+
+        return list(pruned)
 
     def _reconstruct_path(self, current):
         path = [current]

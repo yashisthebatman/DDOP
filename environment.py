@@ -1,6 +1,7 @@
+
 import numpy as np
 from dataclasses import dataclass
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 from opensimplex import OpenSimplex
 from rtree import index
 import config
@@ -44,7 +45,7 @@ class Environment:
     def __init__(self, weather_system: WeatherSystem):
         self.static_nfzs = config.NO_FLY_ZONES
         self.weather: WeatherSystem = weather_system
-        self.dynamic_nfzs = []
+        self.dynamic_nfzs: List[Dict] = []
         self.event_triggered = False
         self.was_nfz_just_added = False
 
@@ -110,7 +111,7 @@ class Environment:
 
     def get_all_nfzs(self) -> List[List[float]]:
         """Get all no-fly zones (static + dynamic)."""
-        return self.static_nfzs + self.dynamic_nfzs
+        return self.static_nfzs + [d['zone'] for d in self.dynamic_nfzs]
 
     def get_obstacle_by_id(self, obs_id):
         """Get obstacle bounds by ID."""
@@ -121,6 +122,20 @@ class Environment:
                     self.bounds = bounds
             return Obstacle(bounds)
         return None
+        
+    def remove_dynamic_obstacles(self):
+        """Removes all dynamic obstacles from the R-tree and clears state."""
+        logging.info(f"Clearing {len(self.dynamic_nfzs)} dynamic obstacles.")
+        for d_nfz in self.dynamic_nfzs:
+            obs_id = d_nfz['id']
+            bounds = d_nfz['bounds']
+            self.obstacle_index.delete(obs_id, bounds)
+            if obs_id in self.obstacles:
+                del self.obstacles[obs_id]
+        
+        self.dynamic_nfzs.clear()
+        self.event_triggered = False
+        self.was_nfz_just_added = False
 
     def is_point_obstructed(self, point: Tuple[float, float, float]) -> bool:
         """Check if a single point is obstructed by any obstacle."""
@@ -165,8 +180,9 @@ class Environment:
         if simulation_time > 120 and not self.event_triggered:
             logging.info("EVENT: New No-Fly Zone activated!")
             zone = [-74.005, 40.74, -73.995, 40.75]
-            self.dynamic_nfzs.append(zone)
             bounds = (zone[0], zone[1], 0, zone[2], zone[3], config.MAX_ALTITUDE)
-            self._add_obstacle_to_index(bounds)
+            obs_id = self._add_obstacle_to_index(bounds)
+            self.dynamic_nfzs.append({'zone': zone, 'bounds': bounds, 'id': obs_id})
+            
             self.event_triggered = True
             self.was_nfz_just_added = True
