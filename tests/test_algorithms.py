@@ -1,3 +1,5 @@
+# tests/test_algorithms.py
+
 import pytest
 from unittest.mock import MagicMock
 import numpy as np
@@ -67,3 +69,29 @@ def test_d_star_lite_replan(grid_world_3d):
     assert replan_path is not None, "D* Lite should have found a replanned path."
     assert (3, 5, 5) not in replan_path, "Replanned path should avoid the new obstacle."
     assert all(p[0] != 5 for p in replan_path), "Replanned path should still avoid the original wall."
+
+# ==============================================================================
+# NEW EDGE CASE TEST
+# Verifies that D* Lite correctly reports no path if the goal is unreachable.
+# ==============================================================================
+def test_d_star_lite_no_path(grid_world_3d):
+    """Tests that D* Lite returns None when the goal is completely blocked."""
+    start, goal = (1, 5, 5), (8, 5, 5)
+    cost_map = grid_world_3d["cost_map"].copy()
+
+    # Add a second wall that completely encloses the goal
+    for y in range(10):
+        for z in range(10):
+            cost_map[(7, y, z)] = float('inf')
+    
+    d_star = DStarLite(
+        start, goal,
+        cost_map=cost_map,
+        heuristic_provider=grid_world_3d["heuristic_provider"],
+        coord_manager=grid_world_3d["coord_manager"],
+        mode='time'
+    )
+    d_star.compute_shortest_path()
+    path = d_star.get_path()
+    
+    assert path is None, "D* Lite should not find a path to a trapped goal."

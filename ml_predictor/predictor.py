@@ -1,6 +1,5 @@
-# ==============================================================================
-# File: ml_predictor/predictor.py
-# ==============================================================================
+# ml_predictor/predictor.py
+
 import numpy as np
 import os
 import joblib
@@ -70,17 +69,27 @@ class EnergyTimePredictor:
     """ML-powered predictor with a robust physics-based fallback."""
     
     def __init__(self, model_path="ml_predictor/drone_predictor_model.joblib"):
-        self.models = None
+        self.models = None # Default to None
         self.fallback_predictor = PhysicsBasedPredictor()
         
         try:
             if os.path.exists(model_path):
-                self.models = joblib.load(model_path)
-                logging.info(f"✅ Successfully loaded ML models from {model_path}")
+                loaded_object = joblib.load(model_path)
+                
+                # --- FIX: Ensure self.models is ONLY set on successful validation ---
+                if isinstance(loaded_object, dict) and 'time_model' in loaded_object and 'energy_model' in loaded_object:
+                    self.models = loaded_object
+                    logging.info(f"✅ Successfully loaded and validated ML models from {model_path}")
+                else:
+                    logging.warning(f"⚠️ ML model file at {model_path} has an incorrect format.")
+                    logging.warning("   Expected a dictionary with keys 'time_model' and 'energy_model'.")
+                    logging.warning("   Using physics-based fallback for all predictions.")
+                    self.models = None # Explicitly set to None on failure
             else:
                 logging.warning(f"⚠️ ML model not found at {model_path}. Using physics-based fallback.")
         except Exception as e:
-            logging.error(f"❌ Error loading ML model: {e}. Using physics-based fallback.")
+            logging.error(f"❌ Error loading ML model from {model_path}: {e}. Using physics-based fallback.")
+            self.models = None # Explicitly set to None on failure
 
     def predict(self, p1, p2, payload_kg, wind_vector, p_prev=None):
         if not self.models:
@@ -93,9 +102,10 @@ class EnergyTimePredictor:
             energy_pred = self.models['energy_model'].predict(features_2d)[0]
             return max(0, time_pred), max(0, energy_pred)
         except Exception as e:
-            logging.warning(f"ML prediction failed: {e}. Using physics-based fallback.")
+            logging.warning(f"An unexpected error occurred during ML prediction: {e}. Using physics-based fallback for this instance.")
             return self.fallback_predictor.predict(p1, p2, payload_kg, wind_vector, p_prev)
-
+    
+    # ... rest of the class is unchanged ...
     def predict_energy_time(self, p1, p2, payload_kg, wind_vector=None, p_prev=None):
         """Wrapper method for compatibility."""
         if wind_vector is None:

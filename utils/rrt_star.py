@@ -1,13 +1,13 @@
+# utils/rrt_star.py
+
 import random
 import logging
 from typing import List, Tuple, Optional
 import numpy as np
 
-# --- (For type hinting and utility functions) ---
 from environment import Environment
 from utils.coordinate_manager import CoordinateManager
 from utils.geometry import calculate_distance_3d
-# --------------------------------------------------
 
 from config import (
     RRT_ITERATIONS,
@@ -20,14 +20,12 @@ from config import (
 )
 
 class Node:
-    """A node in the RRT* search tree."""
     def __init__(self, position: Tuple, parent: 'Node' = None, cost: float = 0.0):
         self.position = position
         self.parent = parent
         self.cost = cost
 
 class RRTStar:
-    """RRT* algorithm for strategic path planning in a 3D environment."""
     def __init__(self, start: Tuple, goal: Tuple, env: 'Environment', coord_manager: CoordinateManager):
         self.start_pos = start
         self.goal_pos = goal
@@ -36,9 +34,28 @@ class RRTStar:
         self.start_node = Node(start)
         self.goal_node = Node(goal)
         self.nodes = [self.start_node]
+        
+        # --- FIX: Create a focused sampling area for efficiency ---
+        self._create_sampling_bounds()
+
+    def _create_sampling_bounds(self):
+        """Creates a bounding box for sampling, focused on the path."""
+        buffer_lon = 0.01  # ~1km longitude buffer
+        buffer_lat = 0.01  # ~1km latitude buffer
+        
+        min_lon = min(self.start_pos[0], self.goal_pos[0]) - buffer_lon
+        max_lon = max(self.start_pos[0], self.goal_pos[0]) + buffer_lon
+        min_lat = min(self.start_pos[1], self.goal_pos[1]) - buffer_lat
+        max_lat = max(self.start_pos[1], self.goal_pos[1]) + buffer_lat
+        
+        # Clamp to the global AREA_BOUNDS
+        self.sample_lon_min = max(min_lon, AREA_BOUNDS[0])
+        self.sample_lon_max = min(max_lon, AREA_BOUNDS[2])
+        self.sample_lat_min = max(min_lat, AREA_BOUNDS[1])
+        self.sample_lat_max = min(max_lat, AREA_BOUNDS[3])
 
     def plan(self) -> Tuple[Optional[List[Tuple]], str]:
-        """Runs the RRT* planning algorithm."""
+        # ... plan logic is unchanged ...
         logging.info("Starting RRT* strategic planner...")
         for i in range(RRT_ITERATIONS):
             sample = self._get_random_sample()
@@ -71,17 +88,19 @@ class RRTStar:
     def _get_random_sample(self) -> Tuple:
         if random.random() < RRT_GOAL_BIAS:
             return self.goal_pos
-        lon = random.uniform(AREA_BOUNDS[0], AREA_BOUNDS[2])
-        lat = random.uniform(AREA_BOUNDS[1], AREA_BOUNDS[3])
+        
+        # --- FIX: Use the focused sampling bounds ---
+        lon = random.uniform(self.sample_lon_min, self.sample_lon_max)
+        lat = random.uniform(self.sample_lat_min, self.sample_lat_max)
         alt = random.uniform(MIN_ALTITUDE, MAX_ALTITUDE)
         return (lon, lat, alt)
 
+    # ... rest of the class methods are unchanged ...
     def _get_nearest_node(self, sample: Tuple) -> Node:
         sample_m = np.array(self.coord_manager.world_to_local_meters(sample))
         return min(self.nodes, key=lambda node: np.linalg.norm(np.array(self.coord_manager.world_to_local_meters(node.position)) - sample_m))
 
     def _steer(self, from_pos: Tuple, to_sample: Tuple) -> Optional[Tuple]:
-        """Steers from a node towards a sample, respecting step size."""
         from_m = np.array(self.coord_manager.world_to_local_meters(from_pos))
         to_m = np.array(self.coord_manager.world_to_local_meters(to_sample))
         direction = to_m - from_m
@@ -103,7 +122,6 @@ class RRTStar:
             clamped_alt = np.clip(alt, MIN_ALTITUDE, MAX_ALTITUDE)
             return (lon, lat, clamped_alt)
         
-        # This log helps us catch if the coordinate manager unexpectedly returns None
         logging.error(f"Steering failed: local_grid_to_world returned None. From: {from_pos}, To: {to_sample}")
         return None
 
@@ -123,7 +141,6 @@ class RRTStar:
             p_node_m = np.array(self.coord_manager.world_to_local_meters(p_node.position))
             dist = np.linalg.norm(new_node_pos_m - p_node_m)
             
-            # FIX: Corrected a critical typo. 'p_code' was used instead of 'p_node'.
             potential_cost = p_node.cost + dist
             
             if potential_cost < min_cost and self._is_collision_free(p_node.position, new_node.position):
@@ -145,7 +162,6 @@ class RRTStar:
                 r_node.cost = potential_new_cost
 
     def _connect_goal_to_tree(self) -> bool:
-        """Finds the best node in the tree to connect to the goal."""
         best_parent_for_goal = None
         min_final_cost = float('inf')
         for node in self.nodes:

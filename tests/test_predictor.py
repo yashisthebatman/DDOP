@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from ml_predictor.predictor import PhysicsBasedPredictor
-# FIX: Import constants from config to use in tests, fixing the AttributeError.
+# FIX: Import constants from config to use in tests, making them robust.
 from config import DRONE_SPEED_MPS, DRONE_VERTICAL_SPEED_MPS
 
 @pytest.fixture

@@ -40,11 +40,7 @@ class CoordinateManager:
         return grid_pos if self.is_valid_local_grid_pos(grid_pos) else None
 
     def local_grid_to_world(self, grid_pos: Optional[Tuple] = None, base_world_pos: Optional[Tuple] = None, offset_m: Optional[Tuple] = None) -> Optional[Tuple[float, float, float]]:
-        # LOG: Log the function call arguments to see exactly what we're getting
-        logging.debug(f"local_grid_to_world called with: grid_pos={grid_pos}, base_world_pos={base_world_pos}, offset_m={offset_m}")
-
-        # FIX: Restructured the function to prevent the logic from falling through and returning None erroneously.
-        # Each use case now has an explicit and immediate return.
+        # FIX: Restructured the function to prevent logic from falling through and to handle use cases explicitly.
         
         # Use Case 1: Apply a meter-based offset (for RRT* steering)
         if base_world_pos is not None and offset_m is not None:
@@ -53,7 +49,6 @@ class CoordinateManager:
             new_lon = base_lon + (dx_m / self.lon_deg_to_m)
             new_lat = base_lat + (dy_m / self.lat_deg_to_m)
             new_alt = base_alt + dz_m
-            logging.debug(f"RRT* steering case calculated result: {(new_lon, new_lat, new_alt)}")
             return new_lon, new_lat, new_alt
         
         # Use Case 2: Convert a D* Lite grid coordinate
@@ -65,7 +60,6 @@ class CoordinateManager:
             new_alt = self.alt_min + (gz * GRID_VERTICAL_RESOLUTION_M)
             return new_lon, new_lat, new_alt
         
-        # This log is critical. If we see it, it means the function was called with bad arguments.
         logging.error("local_grid_to_world called with invalid arguments, returning None.")
         return None
 

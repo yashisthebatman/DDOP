@@ -82,7 +82,7 @@ def test_path_optimality(mock_config, mock_coord_manager, monkeypatch):
     length_low = calculate_path_length(path_low)
 
     # OPTIMIZATION: Reduce high iteration count to speed up test
-    monkeypatch.setattr('utils.rrt_star.RRT_ITERATIONS', 800) # Reduced from 2000
+    monkeypatch.setattr('utils.rrt_star.RRT_ITERATIONS', 800)
     rrt_high = RRTStar(start=(0,0,100), goal=(800, 800, 100), env=env, coord_manager=mock_coord_manager)
     path_high, _ = rrt_high.plan()
     assert path_high is not None
