@@ -1,6 +1,3 @@
-# ==============================================================================
-# File: utils/rrt_star.py
-# ==============================================================================
 import random
 import logging
 from typing import List, Tuple, Optional
@@ -21,7 +18,6 @@ from config import (
     RRT_STEP_SIZE_METERS,
     RRT_NEIGHBORHOOD_RADIUS_METERS
 )
-
 
 class Node:
     """A node in the RRT* search tree."""
@@ -147,7 +143,7 @@ class RRTStar:
             if potential_new_cost < r_node.cost and self._is_collision_free(new_node.position, r_node.position):
                 r_node.parent = new_node
                 r_node.cost = potential_new_cost
-    
+
     def _connect_goal_to_tree(self) -> bool:
         """Finds the best node in the tree to connect to the goal."""
         best_parent_for_goal = None

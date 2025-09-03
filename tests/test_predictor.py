@@ -62,7 +62,7 @@ def test_wind_impact(predictor):
     time_tail, energy_tail = predictor.predict(p1, p2, 1.0, tailwind)
 
     time_no, energy_no = predictor.predict(p1, p2, 1.0, np.array([0,0,0]))
-    
+
     assert time_head > time_no > time_tail
     assert energy_head > energy_no > energy_tail
 
@@ -73,5 +73,5 @@ def test_turning_energy(predictor):
     
     _, energy_straight = predictor.predict(p1, p2_straight, 1.0, np.array([0,0,0]), p_prev)
     _, energy_turn = predictor.predict(p1, p2_turn, 1.0, np.array([0,0,0]), p_prev)
-    
+
     assert energy_turn > energy_straight

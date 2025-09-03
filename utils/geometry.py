@@ -10,7 +10,7 @@ def calculate_vector_angle_3d(v1, v2):
     norm_v2 = np.linalg.norm(v2)
     if norm_v1 == 0 or norm_v2 == 0:
         return 0.0
-        
+    
     v1_u = v1 / norm_v1
     v2_u = v2 / norm_v2
     dot_product = np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)
@@ -21,10 +21,10 @@ def calculate_wind_effect(flight_vector, wind_vector, drone_speed):
     norm_flight_vector = np.linalg.norm(flight_vector)
     if norm_flight_vector == 0:
         return 1.0, 1.0
-
+    
     flight_unit_vector = flight_vector / norm_flight_vector
     wind_component = np.dot(wind_vector, flight_unit_vector)
-    
+
     effective_speed = drone_speed + wind_component
 
     if effective_speed <= 1e-6:
@@ -47,10 +47,10 @@ def line_box_intersection(line_start, line_end, box_bounds):
         return True
 
     direction = line_end - line_start
-    
+
     if np.allclose(direction, 0):
         return np.all(line_start >= box_min) and np.all(line_start <= box_max)
-    
+
     # FIX: Explicitly set the output dtype to float to prevent the casting error.
     inv_direction = np.divide(1.0, direction, where=direction!=0, out=np.full_like(direction, np.inf, dtype=float))
 

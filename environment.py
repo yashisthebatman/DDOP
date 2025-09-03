@@ -116,7 +116,7 @@ class Environment:
         
         candidates = list(self.obstacle_index.intersection((x, y, z, x, y, z)))
         
-        # FIX: Restore the precise check. The R-tree only provides potential candidates.
+        # The R-tree only provides potential candidates.
         # This loop confirms if the point is truly inside one of their bounding boxes.
         for obstacle_id in candidates:
             bounds = self.obstacles[obstacle_id]

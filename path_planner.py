@@ -1,7 +1,4 @@
-# ==============================================================================
-# File: path_planner.py
-# ==============================================================================
-import logging ## FIX: Added logging
+import logging
 from typing import Tuple, List, Optional
 
 from environment import Environment # For type hinting
@@ -12,12 +9,12 @@ from utils.geometry import point_in_aabb
 from utils.heuristics import HeuristicProvider
 from utils.rrt_star import RRTStar
 
-
 class PathPlanner3D:
-    def __init__(self, env: Environment, predictor: EnergyTimePredictor):
+    # FIX: Allow injecting a coord_manager for easier testing
+    def __init__(self, env: Environment, predictor: EnergyTimePredictor, coord_manager: Optional[CoordinateManager] = None):
         self.env = env
         self.predictor = predictor
-        self.coord_manager = CoordinateManager()
+        self.coord_manager = coord_manager if coord_manager else CoordinateManager()
         self.heuristics = HeuristicProvider(self.coord_manager)
 
     def find_path(self, start_pos: Tuple, end_pos: Tuple, payload_kg: float, mode: str, time_weight: float = 0.5) -> Tuple[Optional[List[Tuple]], str]:
@@ -39,11 +36,6 @@ class PathPlanner3D:
         tactical_goal = None
         remaining_path_index = -1
         
-        ## FIX: Logic bug in finding tactical goal.
-        ## The original loop started at index 0 of the stale path. Since the first point is the
-        ## drone's current position (which is safe), it would immediately select itself as the
-        ## tactical goal and break, failing to find a proper escape waypoint.
-        ## The fix is to start iterating from the *next* waypoint in the path (index 1).
         logging.debug(f"Searching for tactical goal in stale path: {stale_path}")
         for i, waypoint in enumerate(stale_path[1:], start=1):
             if not point_in_aabb(waypoint, new_obstacle_bounds):
@@ -63,11 +55,8 @@ class PathPlanner3D:
         
         logging.info(f"D* Lite detour found with {len(detour_path)} waypoints.")
 
-        # The rest of the original path, starting from the tactical goal
         remaining_stale_path = stale_path[remaining_path_index:]
         
-        # The detour path from D* already includes the start (current_pos) and end (tactical_goal).
-        # We want to stitch the detour (without its last point) to the remaining stale path.
         full_new_path = detour_path[:-1] + remaining_stale_path
         
         logging.info("--- Hybrid Replan Successful ---")
@@ -89,7 +78,6 @@ class PathPlanner3D:
         
         if min_g and max_g:
             logging.debug(f"Populating cost map for obstacle between grid points {min_g} and {max_g}")
-            # Ensure ranges are correct regardless of min/max order
             x_range = range(min(min_g[0], max_g[0]), max(min_g[0], max_g[0]) + 1)
             y_range = range(min(min_g[1], max_g[1]), max(min_g[1], max_g[1]) + 1)
             z_range = range(min(min_g[2], max_g[2]), max(min_g[2], max_g[2]) + 1)

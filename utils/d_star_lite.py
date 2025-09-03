@@ -1,6 +1,3 @@
-# ==============================================================================
-# File: utils/d_star_lite.py
-# ==============================================================================
 import heapq
 import logging
 from collections import defaultdict
@@ -18,64 +15,82 @@ class DStarLite:
         self.coord_manager = coord_manager
         self.g_score = defaultdict(lambda: float('inf'))
         self.rhs_score = defaultdict(lambda: float('inf'))
-        self.open_set = []
-        self.open_set_map = {}
+        
+        # The open_set is a priority queue (heap)
+        self.open_set = [] 
+        # The open_set_map is used for quick lookups and updates
+        self.open_set_map = {} 
+
         self.km = 0.0
         self.MOVES = [move for move in product([-1, 0, 1], repeat=3) if move != (0, 0, 0)]
         
         self.rhs_score[self.goal] = 0.0
-        self._push_to_openset(self.goal)
+        key = self._calculate_key(self.goal)
+        heapq.heappush(self.open_set, (key, self.goal))
+        self.open_set_map[self.goal] = key
 
     def _calculate_key(self, node: Tuple) -> Tuple[float, float]:
         h = self.heuristic(node)
         min_score = min(self.g_score[node], self.rhs_score[node])
         return (min_score + h + self.km, min_score)
-    
-    def _push_to_openset(self, node: Tuple):
-        # A node is only pushed if it's inconsistent.
-        # Removing from the map is handled before calling this in _update_node.
-        key = self._calculate_key(node)
-        heapq.heappush(self.open_set, (key, node))
-        self.open_set_map[node] = key
+
+    def _remove_from_openset(self, node: Tuple):
+        """Removes a node from the open set map."""
+        if node in self.open_set_map:
+            del self.open_set_map[node]
+            # Note: We use lazy removal for the heap itself. Stale entries will be ignored.
 
     def _update_node(self, node: Tuple):
-        if node in self.open_set_map:
-            # We are about to re-calculate its priority, so we can remove it from map control.
-            # The stale entry will be ignored by the lazy-removal check in the main loop.
-            del self.open_set_map[node]
+        """Updates the rhs-value of a node and its priority in the open set."""
+        # The node is inconsistent, so remove it from the open set if it's there
+        self._remove_from_openset(node)
 
+        # Update the rhs-value if it's not the goal
         if node != self.goal:
-            self.rhs_score[node] = min((self._cost_between(node, s) + self.g_score[s] for s in self._get_successors(node)), default=float('inf'))
+            self.rhs_score[node] = min(
+                (self._cost_between(node, s) + self.g_score[s] for s in self._get_successors(node)), 
+                default=float('inf')
+            )
         
+        # If the node is now inconsistent, add it back to the open set with its new priority
         if self.g_score[node] != self.rhs_score[node]:
-            self._push_to_openset(node)
+            key = self._calculate_key(node)
+            heapq.heappush(self.open_set, (key, node))
+            self.open_set_map[node] = key
 
     def compute_shortest_path(self):
-        # FIX: This is a robust, textbook implementation of the D* Lite main loop.
-        logging.debug(f"Starting D* Lite. Goal={self.goal}, Start={self.start}. Initial Open Set size: {len(self.open_set)}")
-        
+        """Computes the shortest path from the start to the goal."""
         while self.open_set:
+            # Get the top key from the priority queue without removing the item
+            top_key = self.open_set[0][0]
             start_key = self._calculate_key(self.start)
-            if not self.open_set or self.open_set[0][0] >= start_key and self.rhs_score[self.start] == self.g_score[self.start]:
-                logging.debug("Convergence condition met. Exiting.")
+
+            # Termination condition: The path is optimal when the start node's priority
+            # is better than or equal to the best node in the queue, AND the start is consistent.
+            if top_key >= start_key and self.rhs_score[self.start] == self.g_score[self.start]:
                 break
-            
+
+            # Pop the node with the smallest key
             key, current = heapq.heappop(self.open_set)
 
-            if current not in self.open_set_map or self.open_set_map[current] > key:
-                continue # Stale entry
+            # Lazy removal: if the key we popped is stale (worse than the current best), skip it.
+            if current in self.open_set_map and key > self.open_set_map[current]:
+                continue
             
-            del self.open_set_map[current]
+            # This node is being processed, so remove it from map control.
+            if current in self.open_set_map:
+                del self.open_set_map[current]
 
-            logging.debug(f"Processing node {current}: g={self.g_score[current]:.2f}, rhs={self.rhs_score[current]:.2f}, key={key}")
-
+            # Process the node based on whether it's under-consistent or over-consistent
             if self.g_score[current] > self.rhs_score[current]:
-                logging.debug(f"  -> Node is UNDERconsistent. Setting g = rhs.")
+                # Under-consistent: This node has found a better path. Update its g-score.
                 self.g_score[current] = self.rhs_score[current]
+                # Propagate this new, better cost to its predecessors.
                 for p_node in self._get_predecessors(current):
                     self._update_node(p_node)
             else:
-                logging.debug(f"  -> Node is OVERconsistent. Setting g = inf.")
+                # Over-consistent: The path through this node has become worse.
+                # Set its g-score to infinity and update it and its predecessors.
                 self.g_score[current] = float('inf')
                 self._update_node(current)
                 for p_node in self._get_predecessors(current):
@@ -84,10 +99,13 @@ class DStarLite:
     def update_and_replan(self, new_start: Tuple, cost_updates: Dict):
         self.km += self.heuristic(self.start)
         self.start = new_start
+        
         for cell, cost in cost_updates.items():
             self.cost_map[cell] = cost
+            # When a cost changes, we only need to update the node itself initially.
+            # The compute_shortest_path loop will propagate the changes.
             self._update_node(cell)
-            for pred in self._get_predecessors(cell): self._update_node(pred)
+
         self.compute_shortest_path()
 
     def get_path(self) -> Optional[List[Tuple]]:
@@ -96,13 +114,16 @@ class DStarLite:
             return None
         path, current = [self.start], self.start
         while current != self.goal:
-            if len(path) > self.coord_manager.grid_width * self.coord_manager.grid_height: 
+            if len(path) > 5000: # Safety break to prevent infinite loops in path reconstruction
                 logging.error("D* Lite path reconstruction exceeded max length.")
                 return None
+            
             successors = list(self._get_successors(current))
             if not successors:
                 logging.error(f"D* Lite path reconstruction failed: no successors for {current}")
                 return None
+            
+            # Find the next best step by looking at the cost-to-go (g_score) of successors
             current = min(successors, key=lambda s: self._cost_between(current, s) + self.g_score[s])
             path.append(current)
         return path

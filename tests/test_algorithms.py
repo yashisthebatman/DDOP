@@ -8,18 +8,23 @@ from utils.d_star_lite import DStarLite
 from utils.heuristics import HeuristicProvider
 from utils.coordinate_manager import CoordinateManager
 
+# FIX: Replace slow MagicMock with a fast, simple stub for performance-critical checks.
+class MockCoordManager:
+    """A fast stub for CoordinateManager for D* Lite tests."""
+    def is_valid_local_grid_pos(self, pos: tuple) -> bool:
+        # Simple bounds check for a 10x10x10 grid
+        return 0 <= pos[0] < 10 and 0 <= pos[1] < 10 and 0 <= pos[2] < 10
+
 @pytest.fixture
 def grid_world_3d():
     """Provides a consistent 3D grid environment for testing."""
-    coord_manager = MagicMock(spec=CoordinateManager)
-    coord_manager.is_valid_local_grid_pos.side_effect = lambda pos: (
-        0 <= pos[0] < 10 and 0 <= pos[1] < 10 and 0 <= pos[2] < 10
-    )
+    # Use the fast stub instead of MagicMock
+    coord_manager = MockCoordManager()
     heuristic_provider = HeuristicProvider(coord_manager)
     # A solid "wall" of obstacles where x=5
     obstacles = {(5, y, z) for y in range(10) for z in range(10)}
     cost_map = {obs: float('inf') for obs in obstacles}
-
+    
     return {
         "coord_manager": coord_manager,
         "heuristic_provider": heuristic_provider,

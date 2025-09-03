@@ -1,10 +1,9 @@
-# ==============================================================================
-# File: app.py
-# ==============================================================================
 import streamlit as st
 import plotly.graph_objects as go
 import time
 import pandas as pd
+import numpy as np
+
 # --- (Import all other required classes from your project) ---
 # Assuming all other files are in the correct directory structure
 from config import *
@@ -16,7 +15,6 @@ from utils.d_star_lite import *
 from environment import *
 from ml_predictor.predictor import *
 from path_planner import *
-
 
 def initialize_state():
     defaults = {
@@ -33,12 +31,11 @@ def reset_mission_state():
     for key in list(st.session_state.keys()):
         if key != 'log':
             del st.session_state[key]
-            
+    
     initialize_state()
     st.session_state.log = log
     planner.env.remove_dynamic_obstacles()
     log_event("Mission reset. Ready for new planning.")
-
 
 @st.cache_resource
 def load_planner():
@@ -100,22 +97,22 @@ def planning_stage():
         hub, dest = st.session_state.hub_location, st.session_state.destination
         payload = st.session_state.payload_kg
         path, status = planner.find_path(
-            start_pos=(hub[0], hub[1], TAKEOFF_ALTITUDE), end_pos=dest, 
+            start_pos=(hub[0], hub[1], TAKEOFF_ALTITUDE), end_pos=dest,
             payload_kg=payload, mode='time'
         )
-        if path is None:
-            st.error(f"Path planning failed: {status}"); st.button("New Mission", on_click=reset_mission_state); return
-        
-        # The path from RRT* starts at the first waypoint *after* takeoff. Prepend the start position.
-        full_path = [(hub[0], hub[1], TAKEOFF_ALTITUDE)] + path
-        
-        pred_time, pred_energy = calculate_mission_summary(full_path, payload)
-        st.session_state.update({
-            'initial_payload': payload, 'predicted_time': pred_time, 'predicted_energy': pred_energy,
-            'planned_path': full_path, 'planned_path_np': np.array(full_path),
-            'drone_pos': full_path[0], 'path_index': 0, 'mission_running': False
-        })
-        log_event(f"✅ Plan found! Est. Time: {pred_time:.1f}s, Est. Energy: {pred_energy:.2f}Wh")
+    if path is None:
+        st.error(f"Path planning failed: {status}"); st.button("New Mission", on_click=reset_mission_state); return
+    
+    # The path from RRT* starts at the first waypoint *after* takeoff. Prepend the start position.
+    full_path = [(hub[0], hub[1], TAKEOFF_ALTITUDE)] + path
+    
+    pred_time, pred_energy = calculate_mission_summary(full_path, payload)
+    st.session_state.update({
+        'initial_payload': payload, 'predicted_time': pred_time, 'predicted_energy': pred_energy,
+        'planned_path': full_path, 'planned_path_np': np.array(full_path),
+        'drone_pos': full_path[0], 'path_index': 0, 'mission_running': False
+    })
+    log_event(f"✅ Plan found! Est. Time: {pred_time:.1f}s, Est. Energy: {pred_energy:.2f}Wh")
     st.session_state.stage = 'simulation'; st.rerun()
 
 def simulation_stage():
@@ -127,7 +124,7 @@ def simulation_stage():
         if b1.button("▶️ Run", disabled=st.session_state.mission_running, use_container_width=True): st.session_state.mission_running = True; st.rerun()
         if b2.button("⏸️ Pause", disabled=not st.session_state.mission_running, use_container_width=True): st.session_state.mission_running = False; st.rerun()
         st.subheader("Mission Summary (Predicted)")
-        st.info(f"**Est. Time:** `{st.session_state.predicted_time:.2f} s`\n\n**Est. Energy:** `{st.session_state.predicted_energy:.2f} Wh`")
+        st.info(f"Est. Time: {st.session_state.predicted_time:.2f} s\n\nEst. Energy: {st.session_state.predicted_energy:.2f} Wh")
         st.subheader("Live Status")
         progress = (st.session_state.path_index / (len(st.session_state.planned_path) - 1)) if st.session_state.planned_path and len(st.session_state.planned_path) > 1 else 0
         st.progress(progress, text=f"Progress: {progress:.0%}")
@@ -155,7 +152,7 @@ def main():
     """Main application loop and state machine."""
     st.set_page_config(layout="wide", page_title="Hybrid Drone Path Planner")
     st.title("🚁 Hybrid RRT*/D* Lite Drone Mission Planner")
-
+    
     if 'stage' not in st.session_state:
         initialize_state()
         
@@ -201,7 +198,6 @@ def main():
                 # --- BUG FIX: Correctly set the path index ---
                 # The new index is the length of the already traveled segment, which points
                 # to the drone's current position at the start of the new path segment.
-                # Old (buggy) code: st.session_state.path_index = len(path_traveled) - 1
                 st.session_state.path_index = len(path_traveled)
                 
                 # Re-calculate mission summary with the new path
@@ -246,7 +242,6 @@ def main():
     # ==========================================================================
     # --- END: CORE SIMULATION AND REPLANNING LOOP ---
     # ==========================================================================
-
 
 if __name__ == '__main__':
     # The planner is loaded once and cached by Streamlit
