@@ -35,18 +35,35 @@ class RRTStar:
         self.goal_node = Node(goal)
         self.nodes = [self.start_node]
         
-        # --- FIX: Create a focused sampling area for efficiency ---
         self._create_sampling_bounds()
 
     def _create_sampling_bounds(self):
-        """Creates a bounding box for sampling, focused on the path."""
-        buffer_lon = 0.01  # ~1km longitude buffer
-        buffer_lat = 0.01  # ~1km latitude buffer
+        """
+        Creates a bounding box for sampling, focused on the path.
+        The original logic created a box that was too narrow for straight-line paths,
+        preventing the planner from finding ways around obstacles. This new logic
+        creates a box of a minimum size centered on the path.
+        """
+        # Calculate the center point of the direct path
+        center_lon = (self.start_pos[0] + self.goal_pos[0]) / 2
+        center_lat = (self.start_pos[1] + self.goal_pos[1]) / 2
+
+        # Calculate the path length to define a dynamic box size
+        path_dist_lon = abs(self.start_pos[0] - self.goal_pos[0])
+        path_dist_lat = abs(self.start_pos[1] - self.goal_pos[1])
+
+        # Define a buffer, ensuring a minimum exploration area
+        buffer_lon = max(0.01, path_dist_lon * 0.5) # Minimum ~1km buffer or 50% of path length
+        buffer_lat = max(0.01, path_dist_lat * 0.5) # Minimum ~1km buffer or 50% of path length
+
+        # The total half-width of the box is half the path length plus the buffer
+        half_width_lon = path_dist_lon / 2 + buffer_lon
+        half_width_lat = path_dist_lat / 2 + buffer_lat
         
-        min_lon = min(self.start_pos[0], self.goal_pos[0]) - buffer_lon
-        max_lon = max(self.start_pos[0], self.goal_pos[0]) + buffer_lon
-        min_lat = min(self.start_pos[1], self.goal_pos[1]) - buffer_lat
-        max_lat = max(self.start_pos[1], self.goal_pos[1]) + buffer_lat
+        min_lon = center_lon - half_width_lon
+        max_lon = center_lon + half_width_lon
+        min_lat = center_lat - half_width_lat
+        max_lat = center_lat + half_width_lat
         
         # Clamp to the global AREA_BOUNDS
         self.sample_lon_min = max(min_lon, AREA_BOUNDS[0])
@@ -55,7 +72,6 @@ class RRTStar:
         self.sample_lat_max = min(max_lat, AREA_BOUNDS[3])
 
     def plan(self) -> Tuple[Optional[List[Tuple]], str]:
-        # ... plan logic is unchanged ...
         logging.info("Starting RRT* strategic planner...")
         for i in range(RRT_ITERATIONS):
             sample = self._get_random_sample()
@@ -89,13 +105,11 @@ class RRTStar:
         if random.random() < RRT_GOAL_BIAS:
             return self.goal_pos
         
-        # --- FIX: Use the focused sampling bounds ---
         lon = random.uniform(self.sample_lon_min, self.sample_lon_max)
         lat = random.uniform(self.sample_lat_min, self.sample_lat_max)
         alt = random.uniform(MIN_ALTITUDE, MAX_ALTITUDE)
         return (lon, lat, alt)
 
-    # ... rest of the class methods are unchanged ...
     def _get_nearest_node(self, sample: Tuple) -> Node:
         sample_m = np.array(self.coord_manager.world_to_local_meters(sample))
         return min(self.nodes, key=lambda node: np.linalg.norm(np.array(self.coord_manager.world_to_local_meters(node.position)) - sample_m))

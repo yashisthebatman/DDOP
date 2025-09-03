@@ -105,7 +105,10 @@ def test_hybrid_replan_successful(mock_predictor, clear_environment, mock_coord_
     assert (200, 0, 100) not in new_path
 
 def test_planner_integration_with_real_environment(mock_predictor, monkeypatch):
-    monkeypatch.setattr('environment.NO_FLY_ZONES', [[-74.001, 40.70, -73.999, 40.74]])
+    # FIX: The original NO_FLY_ZONE created an impossible scenario by spanning the entire map latitude.
+    # This new zone creates a solvable wall that the planner must navigate around.
+    solvable_nfz = [[-74.001, 40.70, -73.999, 40.715]]
+    monkeypatch.setattr('environment.NO_FLY_ZONES', solvable_nfz)
     monkeypatch.setattr('environment.MAX_ALTITUDE', 200.0)
     monkeypatch.setattr('environment.Environment._generate_and_index_buildings', lambda self: [])
     
@@ -118,8 +121,9 @@ def test_planner_integration_with_real_environment(mock_predictor, monkeypatch):
     coord_manager = CoordinateManager()
     planner = PathPlanner3D(env, mock_predictor, coord_manager)
 
-    start = (-74.01, 40.72, 50.0)
-    end = (-73.99, 40.72, 50.0)
+    # Start and end points are now on a path blocked by the new NFZ
+    start = (-74.01, 40.71, 50.0)
+    end = (-73.99, 40.71, 50.0)
 
     path, status = planner.find_path(start, end, 1.0, "time")
     

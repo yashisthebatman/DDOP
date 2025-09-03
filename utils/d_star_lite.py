@@ -26,36 +26,42 @@ class DStarLite:
         self.MOVES = [move for move in product([-1, 0, 1], repeat=3) if move != (0, 0, 0)]
         
         self.rhs_score[self.goal] = 0
-        self._update_queue(self.goal)
+        # FIX: Call the new integrated _update_node method
+        self._update_node(self.goal)
 
     def _calculate_key(self, node: Tuple) -> Tuple[float, float]:
         h = self.heuristic(node)
         return (min(self.g_score[node], self.rhs_score[node]) + h + self.km,
                 min(self.g_score[node], self.rhs_score[node]))
 
-    def _update_queue(self, node: tuple):
-        """Adds a node to the priority queue or updates its key if it's already there."""
-        if node in self.open_set_map:
-            # If the node is already in the queue, we can't efficiently update it.
-            # So we remove it conceptually by deleting it from the map.
-            # The stale entry will be ignored when popped later.
-            del self.open_set_map[node]
-
-        # Only add inconsistent nodes to the queue
-        if self.g_score[node] != self.rhs_score[node]:
-            key = self._calculate_key(node)
-            heapq.heappush(self.open_set, (key, node))
-            self.open_set_map[node] = key
-
+    # FIX: The original _update_queue and _update_node logic was flawed.
+    # This new, combined method correctly manages the priority queue state.
     def _update_node(self, node: tuple):
-        """Updates the rhs-value of a node and propagates changes."""
+        """
+        Recalculates the rhs-value for a node and updates its state in the
+        priority queue.
+        """
         if node != self.goal:
             self.rhs_score[node] = min((self._cost_between(node, s) + self.g_score[s]
                                       for s in self._get_successors(node)), default=float('inf'))
-        self._update_queue(node)
+
+        # Now manage the queue state based on consistency
+        is_consistent = self.g_score[node] == self.rhs_score[node]
+        
+        if not is_consistent and node not in self.open_set_map:
+            # If inconsistent and not in queue, add it.
+            key = self._calculate_key(node)
+            heapq.heappush(self.open_set, (key, node))
+            self.open_set_map[node] = key
+        elif is_consistent and node in self.open_set_map:
+            # If it has become consistent, remove it from the conceptual queue.
+            # The stale entry remains in the heap but will be ignored when popped.
+            del self.open_set_map[node]
 
     def compute_shortest_path(self):
         while self.open_set:
+            if not self.open_set_map: break # Queue is conceptually empty
+
             top_key = self.open_set[0][0]
             start_key = self._calculate_key(self.start)
 
@@ -64,17 +70,20 @@ class DStarLite:
                 
             key, current = heapq.heappop(self.open_set)
 
-            # Ignore stale nodes from the priority queue
-            if current not in self.open_set_map or self.open_set_map[current] < key:
+            # Ignore stale nodes
+            if current not in self.open_set_map or self.open_set_map[current] != key:
                 continue
             
+            # The node is now being processed, so it's conceptually removed from the queue
             del self.open_set_map[current]
 
             if self.g_score[current] > self.rhs_score[current]:
+                # Underconsistent: Make it consistent
                 self.g_score[current] = self.rhs_score[current]
                 for p_node in self._get_predecessors(current):
                     self._update_node(p_node)
             else:
+                # Overconsistent: Propagate cost increase
                 self.g_score[current] = float('inf')
                 self._update_node(current)
                 for p_node in self._get_predecessors(current):
@@ -84,12 +93,12 @@ class DStarLite:
         self.km += self.heuristic(self.start)
         self.start = new_start
         
-        for u, v_list in cost_updates.items():
-            for v, cost in v_list.items():
-                 # This logic would need to be more complex for edge cost changes.
-                 # For simple node obstacles, we update the node and its predecessors.
-                 self.cost_map[v] = cost 
-                 self._update_node(u)
+        # FIX: Correctly handle node-based cost updates by updating only the
+        # predecessors of the changed node.
+        for changed_node, new_cost in cost_updates.items():
+            self.cost_map[changed_node] = new_cost
+            for p_node in self._get_predecessors(changed_node):
+                 self._update_node(p_node)
 
         self.compute_shortest_path()
 
