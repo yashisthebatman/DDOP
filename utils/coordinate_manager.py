@@ -1,3 +1,4 @@
+# FILE: utils/coordinate_manager.py
 import logging
 from typing import Tuple, Optional
 import numpy as np
@@ -34,6 +35,13 @@ class CoordinateManager:
     def world_to_local_meters(self, world_pos: Tuple) -> Tuple[float, float, float]:
         lon, lat, alt = world_pos
         return (lon - self.lon_min) * self.lon_deg_to_m, (lat - self.lat_min) * self.lat_deg_to_m, alt
+
+    def local_meters_to_world(self, local_pos_m: Tuple) -> Tuple[float, float, float]:
+        """Converts a local meter-based position back to world lon/lat/alt."""
+        mx, my, alt = local_pos_m
+        lon = (mx / self.lon_deg_to_m) + self.lon_min
+        lat = (my / self.lat_deg_to_m) + self.lat_min
+        return lon, lat, alt
 
     def world_to_local_grid(self, world_pos: Tuple) -> Optional[Tuple[int, int, int]]:
         origin_m = self.world_to_local_meters(self.local_grid_origin_world)

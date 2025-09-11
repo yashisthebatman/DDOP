@@ -1,3 +1,4 @@
+# FILE: environment.py
 import numpy as np
 from dataclasses import dataclass
 from typing import Tuple, List, Dict
@@ -7,6 +8,7 @@ import logging
 
 from config import AREA_BOUNDS, MIN_ALTITUDE, MAX_ALTITUDE, NO_FLY_ZONES
 from utils.geometry import line_segment_intersects_aabb
+from utils.coordinate_manager import CoordinateManager
 
 @dataclass
 class Order:
@@ -22,21 +24,17 @@ class Building:
     height: float
 
 class RiskMap:
-    """Represents a 2D grid of risk values for pathfinding cost functions."""
+    # ... (RiskMap class is unchanged)
     def __init__(self):
-        # Placeholder for a more sophisticated risk model (e.g., from population density)
-        self.risk_grid = np.random.rand(10, 10) * 0.1 # Low base risk
-        # Add a high-risk area for testing
+        self.risk_grid = np.random.rand(10, 10) * 0.1
         self.risk_grid[3:6, 3:6] = 0.9
-
     def get_risk(self, world_pos: Tuple[float, float, float]) -> float:
-        # Simple mapping from world coordinates to grid indices
-        # This should be replaced with a proper geo-referenced lookup
         lon_idx = int(np.interp(world_pos[0], [AREA_BOUNDS[0], AREA_BOUNDS[2]], [0, 9]))
         lat_idx = int(np.interp(world_pos[1], [AREA_BOUNDS[1], AREA_BOUNDS[3]], [0, 9]))
         return self.risk_grid[np.clip(lat_idx, 0, 9), np.clip(lon_idx, 0, 9)]
 
 class WeatherSystem:
+    # ... (WeatherSystem class is unchanged)
     def __init__(self, seed=None, scale=150.0, max_speed=15.0):
         if seed is None:
             seed = np.random.randint(0, 1000)
@@ -45,32 +43,27 @@ class WeatherSystem:
         self.scale = scale
         self.max_speed = max_speed
         self.time = 0
-
     def update_weather(self, time_step=0.01):
         self.time += time_step
-
     def get_wind_at_location(self, lon: float, lat: float, alt: float) -> np.ndarray:
-        """
-        Calculates wind vector, now with altitude dependency.
-        Wind speed generally increases with altitude.
-        """
         norm_lon, norm_lat = lon / self.scale, lat / self.scale
         wind_x_noise = self.noise_gen_x.noise3(norm_lon, norm_lat, self.time)
         wind_y_noise = self.noise_gen_y.noise3(norm_lon, norm_lat, self.time)
-        
-        # Altitude factor: wind is calmer near the ground, stronger higher up.
-        # Starts at ~70% strength at MIN_ALTITUDE, up to 120% at MAX_ALTITUDE.
         altitude_factor = np.interp(alt, [MIN_ALTITUDE, MAX_ALTITUDE], [0.7, 1.2])
-        
         effective_max_speed = self.max_speed * altitude_factor
         wind_x = wind_x_noise * effective_max_speed
         wind_y = wind_y_noise * effective_max_speed
-        
         return np.array([wind_x, wind_y, 0])
 
 
 class Environment:
-    def __init__(self, weather_system: WeatherSystem):
+    # --- FIX STARTS HERE ---
+    # The Environment now depends on a CoordinateManager to correctly handle
+    # the conversion from world coordinates (lon/lat) to a meter-based system
+    # for all internal geometric operations and obstacle storage.
+    def __init__(self, weather_system: WeatherSystem, coord_manager: CoordinateManager):
+        self.coord_manager = coord_manager
+    # --- FIX ENDS HERE ---
         self.static_nfzs = NO_FLY_ZONES
         self.weather: WeatherSystem = weather_system
         self.risk_map: RiskMap = RiskMap()
@@ -82,17 +75,18 @@ class Environment:
         p.dimension = 3
         self.obstacle_index = index.Index(properties=p)
         self.obstacle_counter = 0
+        # self.obstacles now stores bounds in METERS
         self.obstacles = {}
 
-        logging.info("Building spatial index for obstacles...")
+        logging.info("Building spatial index for obstacles in meter-space...")
         self.buildings: List[Building] = self._generate_and_index_buildings()
         self._index_static_nfzs()
         logging.info(f"Spatial index ready. Indexed {len(self.obstacles)} obstacles.")
 
-    def _add_obstacle_to_index(self, bounds: tuple):
+    def _add_obstacle_to_index(self, bounds_m: tuple):
         obstacle_id = self.obstacle_counter
-        self.obstacle_index.insert(obstacle_id, bounds)
-        self.obstacles[obstacle_id] = bounds
+        self.obstacle_index.insert(obstacle_id, bounds_m)
+        self.obstacles[obstacle_id] = bounds_m
         self.obstacle_counter += 1
         return obstacle_id
 
@@ -101,26 +95,41 @@ class Environment:
         np.random.seed(42)
         num_buildings = 20
         for i in range(num_buildings):
+            # Generate buildings in world coordinates (lon/lat)
             center_x = np.random.uniform(AREA_BOUNDS[0], AREA_BOUNDS[2])
             center_y = np.random.uniform(AREA_BOUNDS[1], AREA_BOUNDS[3])
-            width = np.random.uniform(0.001, 0.003)
-            height_building = np.random.uniform(0.001, 0.003)
+            width_deg = np.random.uniform(0.0001, 0.0003) # Smaller size in degrees
+            height_deg = np.random.uniform(0.0001, 0.0003)
             altitude = np.random.uniform(50, MAX_ALTITUDE)
             
-            building = Building(id=i, center_xy=(center_x, center_y), size_xy=(width, height_building), height=altitude)
+            building = Building(id=i, center_xy=(center_x, center_y), size_xy=(width_deg, height_deg), height=altitude)
             buildings.append(building)
             
-            half_width, half_height = width / 2, height_building / 2
-            bounds = (center_x - half_width, center_y - half_height, 0, center_x + half_width, center_y + half_height, altitude)
-            self._add_obstacle_to_index(bounds)
+            # --- FIX: Convert building bounds from world (lon/lat) to local meters before indexing ---
+            bottom_left_world = (center_x - width_deg / 2, center_y - height_deg / 2, 0)
+            top_right_world = (center_x + width_deg / 2, center_y + height_deg / 2, altitude)
+            
+            min_mx, min_my, _ = self.coord_manager.world_to_local_meters(bottom_left_world)
+            max_mx, max_my, _ = self.coord_manager.world_to_local_meters(top_right_world)
+
+            bounds_m = (min_mx, min_my, 0, max_mx, max_my, altitude)
+            self._add_obstacle_to_index(bounds_m)
         return buildings
 
     def _index_static_nfzs(self):
         for zone in self.static_nfzs:
-            bounds = (zone[0], zone[1], MIN_ALTITUDE, zone[2], zone[3], MAX_ALTITUDE)
-            self._add_obstacle_to_index(bounds)
+            # --- FIX: Convert NFZ bounds from world (lon/lat) to local meters before indexing ---
+            bottom_left_world = (zone[0], zone[1], MIN_ALTITUDE)
+            top_right_world = (zone[2], zone[3], MAX_ALTITUDE)
+            
+            min_mx, min_my, _ = self.coord_manager.world_to_local_meters(bottom_left_world)
+            max_mx, max_my, _ = self.coord_manager.world_to_local_meters(top_right_world)
+            
+            bounds_m = (min_mx, min_my, MIN_ALTITUDE, max_mx, max_my, MAX_ALTITUDE)
+            self._add_obstacle_to_index(bounds_m)
 
     def remove_dynamic_obstacles(self):
+        # ... (unchanged)
         if not self.dynamic_nfzs:
             return
         logging.info(f"Clearing {len(self.dynamic_nfzs)} dynamic obstacles...")
@@ -135,45 +144,65 @@ class Environment:
         self.event_triggered = False
         self.was_nfz_just_added = False
 
-    def is_point_obstructed(self, point: Tuple[float, float, float]) -> bool:
-        """Check if a single point is inside any obstacle."""
-        x, y, z = point
-        if not (AREA_BOUNDS[0] <= x <= AREA_BOUNDS[2] and
-                AREA_BOUNDS[1] <= y <= AREA_BOUNDS[3] and
-                MIN_ALTITUDE <= z <= MAX_ALTITUDE):
+    def is_point_obstructed(self, point_world: Tuple[float, float, float]) -> bool:
+        """Check if a single point (in world coords) is inside any obstacle."""
+        # --- FIX: Convert world point to local meters for checks ---
+        point_m = self.coord_manager.world_to_local_meters(point_world)
+        mx, my, mz = point_m
+        
+        # Check against area bounds (still done in world coords)
+        lon, lat, alt = point_world
+        if not (AREA_BOUNDS[0] <= lon <= AREA_BOUNDS[2] and
+                AREA_BOUNDS[1] <= lat <= AREA_BOUNDS[3] and
+                MIN_ALTITUDE <= alt <= MAX_ALTITUDE):
             return True
         
-        candidates = list(self.obstacle_index.intersection((x, y, z, x, y, z)))
+        # Query the meter-based rtree index
+        candidates = list(self.obstacle_index.intersection((mx, my, mz, mx, my, mz)))
         
         for obstacle_id in candidates:
-            bounds = self.obstacles[obstacle_id]
-            if (bounds[0] <= x <= bounds[3] and
-                bounds[1] <= y <= bounds[4] and
-                bounds[2] <= z <= bounds[5]):
+            bounds_m = self.obstacles[obstacle_id]
+            if (bounds_m[0] <= mx <= bounds_m[3] and
+                bounds_m[1] <= my <= bounds_m[4] and
+                bounds_m[2] <= mz <= bounds_m[5]):
                 return True
         return False
 
-    def is_line_obstructed(self, p1: Tuple[float, float, float], p2: Tuple[float, float, float]) -> bool:
-        min_x, min_y, min_z = min(p1[0], p2[0]), min(p1[1], p2[1]), min(p1[2], p2[2])
-        max_x, max_y, max_z = max(p1[0], p2[0]), max(p1[1], p2[1]), max(p1[2], p2[2])
+    def is_line_obstructed(self, p1_world: Tuple[float, float, float], p2_world: Tuple[float, float, float]) -> bool:
+        """Check if a line (between two world points) intersects any obstacle."""
+        # --- FIX: Convert world points to local meters for all geometric checks ---
+        p1_m = np.array(self.coord_manager.world_to_local_meters(p1_world))
+        p2_m = np.array(self.coord_manager.world_to_local_meters(p2_world))
+
+        min_mx, min_my, min_mz = np.minimum(p1_m, p2_m)
+        max_mx, max_my, max_mz = np.maximum(p1_m, p2_m)
         
-        candidate_ids = list(self.obstacle_index.intersection((min_x, min_y, min_z, max_x, max_y, max_z)))
+        # Query the meter-based rtree index
+        candidate_ids = list(self.obstacle_index.intersection((min_mx, min_my, min_mz, max_mx, max_my, max_mz)))
         
         for obs_id in candidate_ids:
-            bounds = self.obstacles[obs_id]
-            if line_segment_intersects_aabb(p1, p2, bounds):
+            bounds_m = self.obstacles[obs_id]
+            if line_segment_intersects_aabb(tuple(p1_m), tuple(p2_m), bounds_m):
                 return True
         return False
 
     def update_environment(self, simulation_time: float, time_step: float):
+        # ... (update_environment logic is now based on meters)
         self.weather.update_weather(time_step)
         
         if simulation_time > 15 and not self.event_triggered:
             logging.info("EVENT: New dynamic No-Fly Zone activated!")
-            zone = [-74.005, 40.72, -73.995, 40.73] 
-            bounds = (zone[0], zone[1], MIN_ALTITUDE, zone[2], zone[3], MAX_ALTITUDE)
-            obs_id = self._add_obstacle_to_index(bounds)
-            self.dynamic_nfzs.append({'zone': zone, 'bounds': bounds, 'id': obs_id})
+            zone_world = [-74.005, 40.72, -73.995, 40.73] 
+            
+            # Convert to meters to add to index
+            bl_world = (zone_world[0], zone_world[1], MIN_ALTITUDE)
+            tr_world = (zone_world[2], zone_world[3], MAX_ALTITUDE)
+            min_mx, min_my, _ = self.coord_manager.world_to_local_meters(bl_world)
+            max_mx, max_my, _ = self.coord_manager.world_to_local_meters(tr_world)
+            bounds_m = (min_mx, min_my, MIN_ALTITUDE, max_mx, max_my, MAX_ALTITUDE)
+            
+            obs_id = self._add_obstacle_to_index(bounds_m)
+            self.dynamic_nfzs.append({'zone': zone_world, 'bounds': bounds_m, 'id': obs_id})
             
             self.event_triggered = True
             self.was_nfz_just_added = True

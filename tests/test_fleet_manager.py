@@ -12,7 +12,10 @@ def mock_cbs_planner():
 
 @pytest.fixture
 def fleet_manager(mock_cbs_planner):
-    return FleetManager(mock_cbs_planner)
+    # FIX: The FleetManager constructor requires a 'predictor' argument.
+    # A mock predictor is now provided to prevent the TypeError during setup.
+    predictor_mock = MagicMock()
+    return FleetManager(mock_cbs_planner, predictor_mock)
 
 def test_add_mission(fleet_manager):
     mission = Mission("drone1", (0,0,10), [(10,10,10)], 1.0, {})

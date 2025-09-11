@@ -115,19 +115,33 @@ class AnytimeRRTStar:
                 nearest = node
         return nearest
 
+    # --- FIX STARTS HERE ---
+    # The original _steer function had a critical bug where it mixed coordinate systems.
+    # This new version performs all geometric calculations in the consistent local meter
+    # space and only converts the final result back to world coordinates.
     def _steer(self, from_pos: Tuple, to_sample: Tuple) -> Optional[Tuple]:
         from_m = np.array(self.coord_manager.world_to_local_meters(from_pos))
         to_m = np.array(self.coord_manager.world_to_local_meters(to_sample))
+        
         direction = to_m - from_m
         dist = np.linalg.norm(direction)
-        if dist < 1e-6: return None
+        
+        if dist < 1e-6:
+            return None
+        
+        # Calculate the new position in the meter-based coordinate system
         target_dist = min(dist, RRT_STEP_SIZE_METERS)
         offset_m = (direction / dist) * target_dist
+        new_pos_m = from_m + offset_m
         
-        new_lon = from_pos[0] + (offset_m[0] / self.coord_manager.lon_deg_to_m)
-        new_lat = from_pos[1] + (offset_m[1] / self.coord_manager.lat_deg_to_m)
-        new_alt = np.clip(from_pos[2] + offset_m[2], MIN_ALTITUDE, MAX_ALTITUDE)
-        return (new_lon, new_lat, new_alt)
+        # Convert the final meter-based position back to world coordinates
+        new_pos_world = self.coord_manager.local_meters_to_world(tuple(new_pos_m))
+        
+        # We still need to respect altitude limits
+        new_alt_clipped = np.clip(new_pos_world[2], MIN_ALTITUDE, MAX_ALTITUDE)
+        
+        return (new_pos_world[0], new_pos_world[1], new_alt_clipped)
+    # --- FIX ENDS HERE ---
 
     def _is_collision_free(self, p1: Tuple, p2: Tuple) -> bool:
         return not self.env.is_line_obstructed(p1, p2)

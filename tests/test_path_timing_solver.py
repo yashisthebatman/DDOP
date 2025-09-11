@@ -4,14 +4,19 @@ from unittest.mock import MagicMock
 from utils.path_timing_solver import PathTimingSolver
 from fleet.cbs_components import Constraint
 from utils.coordinate_manager import CoordinateManager
-from config import DRONE_SPEED_MPS, MAX_ALTITUDE
+from config import DRONE_SPEED_MPS, MAX_ALTITUDE, GRID_RESOLUTION_M
 
 @pytest.fixture
 def mock_coord_manager():
     manager = MagicMock(spec=CoordinateManager)
     # Mock a simple conversion: 1 unit of world coord = 1000 meters
     manager.world_to_local_meters.side_effect = lambda p: (p[0]*1000, p[1]*1000, p[2])
-    manager.world_to_local_grid.side_effect = lambda p: (int(p[0]), int(p[1]), int(p[2]))
+    # A realistic mock that correctly separates points based on a grid resolution.
+    manager.world_to_local_grid.side_effect = lambda p: (
+        int(round(p[0] * 1000 / GRID_RESOLUTION_M)),
+        int(round(p[1] * 1000 / GRID_RESOLUTION_M)),
+        int(p[2])
+    )
     manager.alt_min = 0
     manager.alt_max = MAX_ALTITUDE
     return manager
@@ -35,8 +40,11 @@ def test_basic_timing(solver):
 def test_timing_with_wait_constraint(solver):
     """Tests if the solver can wait at a waypoint to avoid a constraint."""
     geom_path = [(0,0,10), (0.02,0,10)] # 20m path, takes 1s
-    # Constraint: Cannot be at grid pos (0,0,10) at time=1
-    constraints = [Constraint(agent_id=1, position=(0,0,10), timestamp=1)]
+    
+    # Constraint is on the destination grid cell at the time of arrival (t=1).
+    # This correctly blocks the "move" action while allowing the "wait" action.
+    destination_grid_cell = (1, 0, 10)
+    constraints = [Constraint(agent_id=1, position=destination_grid_cell, timestamp=1)]
     
     timed_path = solver.find_timing(geom_path, constraints)
 
@@ -52,12 +60,19 @@ def test_timing_with_wait_constraint(solver):
 
 def test_timing_fails_if_unsolvable(solver):
     """Tests that the solver returns None if the path is impossible."""
-    # FIX: The original path resulted in a 50s travel time, bypassing the constraints.
-    # This new path has a 20-meter distance, resulting in a 1s travel time.
-    # This forces the solver to interact with the constraints and test the wait logic.
     geom_path = [(0,0,10), (0.02,0,10)]
-    # Constraint: The start is blocked for more timesteps (14) than MAX_WAIT_TIME (10).
-    constraints = [Constraint(1, (0,0,10), t) for t in range(1, 15)]
+
+    # FIX: The original test logic was flawed. To make the scenario truly
+    # unsolvable, both the "move" and "wait" options from the start must be blocked.
+    start_grid_cell = (0, 0, 10)
+    dest_grid_cell = (1, 0, 10)
+
+    # 1. Block the "move" action by constraining the destination at its arrival time (t=1).
+    # 2. Block the "wait" action by constraining the start cell for all possible wait times.
+    constraints = [
+        Constraint(1, dest_grid_cell, 1)
+    ]
+    constraints.extend([Constraint(1, start_grid_cell, t) for t in range(1, 15)])
     
     timed_path = solver.find_timing(geom_path, constraints)
     assert timed_path is None

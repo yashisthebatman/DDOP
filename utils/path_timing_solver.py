@@ -29,7 +29,10 @@ class PathTimingSolver:
         current_s = state
         while current_s in came_from:
             parent_s = came_from[current_s]
-            if parent_s[0] == current_s[0]:
+            # FIX: Check if parent_s is not None before attempting to access its index.
+            # This handles the base case for the start_state, whose parent is None,
+            # preventing the TypeError: 'NoneType' object is not subscriptable.
+            if parent_s and parent_s[0] == current_s[0]:
                 wait_count += 1
                 current_s = parent_s
             else:

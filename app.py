@@ -41,9 +41,13 @@ def reset_simulation():
 @st.cache_resource
 def load_global_planners():
     log_event("Loading environment and global planners...")
-    env = Environment(WeatherSystem())
-    predictor = EnergyTimePredictor()
+    # FIX: The CoordinateManager must be created first, as the Environment
+    # now depends on it to correctly convert all obstacle coordinates into a
+    # consistent, meter-based system for geometric calculations.
     coord_manager = CoordinateManager()
+    env = Environment(WeatherSystem(), coord_manager)
+    
+    predictor = EnergyTimePredictor()
     cbsh_planner = CBSHPlanner(env, coord_manager)
     single_agent_planner = SingleAgentPlanner(env, predictor, coord_manager)
     log_event("✅ Planners ready.")
@@ -59,6 +63,9 @@ def log_event(m):
     st.session_state.log.insert(0, f"{time.strftime('%H:%M:%S')} - {m}")
 
 def create_box(b):
+    # This function needs to be updated to handle the building data which is
+    # still in world coordinates for visualization purposes.
+    # The internal representation for collision is in meters, but visualization uses lon/lat.
     x, y, h = b.center_xy[0], b.center_xy[1], b.height
     dx, dy = b.size_xy[0]/2, b.size_xy[1]/2
     return go.Mesh3d(x=[x-dx,x+dx,x+dx,x-dx,x-dx,x+dx,x+dx,x-dx], y=[y-dy,y-dy,y+dy,y+dy,y-dy,y-dy,y+dy,y+dy], z=[0,0,0,0,h,h,h,h], i=[7,0,0,0,4,4,6,6,4,0,3,2],j=[3,4,1,2,5,6,5,2,0,1,6,3],k=[0,7,2,3,6,7,2,5,1,2,5,6], color='grey', opacity=0.7, name='Building', hoverinfo='none')

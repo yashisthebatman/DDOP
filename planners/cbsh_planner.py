@@ -17,7 +17,7 @@ from utils.geometry import calculate_distance_3d
 # FIX: The original time budget was too low for the RRT* planner to reliably
 # find paths in the complex, obstacle-dense environment. Increasing it gives
 # the low-level planner a higher chance of success.
-LOW_LEVEL_TIME_BUDGET = 1.0
+LOW_LEVEL_TIME_BUDGET = 2.0
 # Drones must be at least this far apart to be considered conflict-free
 MIN_SEPARATION_METERS = 15.0
 
