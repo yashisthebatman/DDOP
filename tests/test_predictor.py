@@ -38,7 +38,7 @@ def test_vertical_flight(predictor):
     # FIX: Use the imported constant for the assertion.
     assert time_up == pytest.approx(100 / DRONE_VERTICAL_SPEED_MPS)
     assert energy_up > energy_down
-    assert energy_down > 0
+    assert energy_down > 0 # Descending still requires power to control
 
 def test_payload_impact(predictor):
     """Test that a heavier payload increases energy consumption."""

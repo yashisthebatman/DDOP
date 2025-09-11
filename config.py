@@ -2,33 +2,35 @@
 import warnings
 
 # --- Simulation Environment ---
+AREA_BOUNDS = [-74.02, 40.70, -73.97, 40.74]
+MIN_ALTITUDE = 10.0
+MAX_ALTITUDE = 200.0
+TAKEOFF_ALTITUDE = 15.0
 
-AREA_BOUNDS = [-74.02, 40.70, -73.97, 40.74]  # [lon_min, lat_min, lon_max, lat_max]
-MIN_ALTITUDE = 10.0  # meters
-MAX_ALTITUDE = 200.0  # meters
-TAKEOFF_ALTITUDE = 15.0  # meters
+# --- App Simulation Control ---
+SIMULATION_TIME_STEP = 0.5
+SIMULATION_UI_REFRESH_INTERVAL = 0.05
 
-# --- Tactical Grid Configuration for A* and D* Lite ---
+# --- ML Model and Retraining Configuration ---
+MODEL_FILE_PATH = "ml_predictor/drone_predictor_model.joblib"
+TRAINING_DATA_PATH = "training/training_data.csv"
+RETRAINING_THRESHOLD = 20 # Retrain after this many new data points are collected.
 
-GRID_RESOLUTION_M = 15 # Horizontal resolution (in meters) for the grid
-GRID_VERTICAL_RESOLUTION_M = 5 # Vertical resolution (in meters) for the grid
+# --- Tactical Grid Configuration ---
+GRID_RESOLUTION_M = 15
+GRID_VERTICAL_RESOLUTION_M = 5
 
-# --- RRT* Strategic Planner (for single-agent RTH) ---
-
-# FIX: The original RRT* parameters were not well-suited for a dense,
-# obstacle-filled environment. A smaller step size is more likely to find
-# a path through the gaps between buildings.
-RRT_ITERATIONS = 5000       # Number of nodes to try (increased for more exploration)
-RRT_STEP_SIZE_METERS = 75.0  # How far to extend the tree in one step (decreased for finer navigation)
-RRT_GOAL_BIAS = 0.1         # Probability of sampling the goal point (0.0 to 1.0)
-RRT_NEIGHBORHOOD_RADIUS_METERS = 100.0 # Radius to search for rewiring (decreased, but still > step_size)
+# --- RRT* Strategic Planner ---
+RRT_ITERATIONS = 5000
+RRT_STEP_SIZE_METERS = 75.0
+RRT_GOAL_BIAS = 0.1
+RRT_NEIGHBORHOOD_RADIUS_METERS = 100.0
 
 # --- Hub Locations & Destinations ---
-
 HUBS = {
-    "Hub A (South Manhattan)": (-74.013, 40.705, 10.0),
-    "Hub B (Midtown East)": (-73.975, 40.738, 10.0),
-    "Hub C (West Side)": (-74.005, 40.735, 10.0)
+    "Hub A (South Manhattan)": (-74.018, 40.705, 10.0),
+    "Hub B (Midtown East)": (-73.975, 40.739, 10.0),
+    "Hub C (West Side)": (-74.008, 40.735, 10.0)
 }
 DESTINATIONS = {
     "One World Trade": (-74.0134, 40.7127, 100.0),
@@ -44,14 +46,12 @@ DESTINATIONS = {
 }
 
 # --- No-Fly Zones (Static Obstacles) ---
-
 NO_FLY_ZONES = [
     [-74.01, 40.715, -73.995, 40.725],
     [-73.985, 40.73, -73.975, 40.74]
 ]
 
 # --- Drone & Physics ---
-
 DRONE_SPEED_MPS = 20.0
 DRONE_VERTICAL_SPEED_MPS = 5.0
 DRONE_MAX_PAYLOAD_KG = 5.0
@@ -62,13 +62,12 @@ GRAVITY = 9.81
 TURN_ENERGY_FACTOR = 0.005
 DRONE_BASE_POWER_WATTS = 50.0
 DRONE_ADDITIONAL_WATTS_PER_KG = 10.0
-RTH_BATTERY_THRESHOLD_FACTOR = 1.5 # Trigger RTH if energy to hub * this factor > remaining battery
+RTH_BATTERY_THRESHOLD_FACTOR = 1.5
 
 # --- Pathfinding Parameters ---
 MAX_PATH_LENGTH = 5000
 
 # --- Configuration Validation ---
-
 def validate_coordinates():
     lon_min, lat_min, lon_max, lat_max = AREA_BOUNDS
     all_points = {**HUBS, **DESTINATIONS}

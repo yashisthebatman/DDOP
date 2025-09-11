@@ -4,7 +4,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 import logging
-import numpy as np # Import numpy for sqrt
+import numpy as np
 
 # --- Configuration ---
 # In a real app, this would come from a config file or environment variables
@@ -21,18 +21,18 @@ def load_data_from_db():
     logging.info(f"Loading data from {DB_CONNECTION_STRING}...")
     # This is mock data. Replace with actual DB query.
     data = {
-        'distance_3d': [100, 150, 200, 50, 300],
-        'altitude_change': [10, -5, 20, 5, -15],
-        'horizontal_distance': [99.5, 149.9, 199.0, 49.7, 299.6],
-        'payload_kg': [1.0, 2.5, 0.5, 5.0, 1.5],
-        'wind_speed': [2.0, 5.0, 1.0, 8.0, 3.0],
-        'wind_alignment': [0.5, -0.8, 0.9, -0.1, 0.0],
-        'turning_angle': [0, 90, 15, 45, 180],
-        'start_altitude': [50, 60, 40, 80, 100],
-        'end_altitude': [60, 55, 60, 85, 85],
-        'abs_altitude_change': [10, 5, 20, 5, 15],
-        'actual_time': [10.2, 18.1, 15.5, 8.0, 25.1],
-        'actual_energy': [5.5, 12.3, 8.1, 9.5, 15.2]
+        'distance_3d': np.random.uniform(50, 500, 100),
+        'altitude_change': np.random.uniform(-50, 50, 100),
+        'horizontal_distance': np.random.uniform(50, 500, 100),
+        'payload_kg': np.random.uniform(0.1, 5.0, 100),
+        'wind_speed': np.random.uniform(0, 10, 100),
+        'wind_alignment': np.random.uniform(-1, 1, 100),
+        'turning_angle': np.random.uniform(0, 180, 100),
+        'start_altitude': np.random.uniform(20, 150, 100),
+        'end_altitude': np.random.uniform(20, 150, 100),
+        'abs_altitude_change': np.random.uniform(0, 50, 100),
+        'actual_time': np.random.uniform(10, 60, 100),
+        'actual_energy': np.random.uniform(5, 25, 100)
     }
     return pd.DataFrame(data)
 

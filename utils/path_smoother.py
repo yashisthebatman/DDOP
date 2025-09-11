@@ -28,7 +28,7 @@ class PathSmoother:
             # waypoints, which is the function's intent.
             tck, u = splprep(path_np, s=0, k=spline_degree)
             
-            num_points_out = num_points_in_path * 5
+            num_points_out = max(num_points_in_path * 5, 20)
             u_new = np.linspace(u.min(), u.max(), num_points_out)
             x_new, y_new, z_new = splev(u_new, tck, der=0)
             

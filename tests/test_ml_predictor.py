@@ -1,11 +1,15 @@
+# FILE: tests/test_ml_predictor.py
 import pytest
 import joblib
 import numpy as np
+import os
 from unittest.mock import MagicMock, patch
 
 from ml_predictor.predictor import EnergyTimePredictor
+from config import MODEL_FILE_PATH
 
-class PicklableMockModel:
+# A simple mock model class that can be pickled by joblib
+class MockModel:
     def __init__(self, return_value):
         self._return_value = np.array([return_value])
     def predict(self, features):
@@ -17,42 +21,42 @@ def mock_physics_predictor():
     predictor.predict.return_value = (123.45, 67.89)
     return predictor
 
-def create_mock_model_file(tmp_path, content):
-    model_path = tmp_path / "test_model.joblib"
-    joblib.dump(content, model_path)
-    return str(model_path)
+def test_predictor_loads_from_local_file(tmp_path, mock_physics_predictor):
+    """Tests that the predictor correctly loads a model from a local joblib file."""
+    # Create a dummy model file in the temporary test directory
+    model_dir = tmp_path / "ml_predictor"
+    model_dir.mkdir()
+    model_path = model_dir / os.path.basename(MODEL_FILE_PATH)
 
-@patch('ml_predictor.predictor.mlflow')
-def test_predictor_loads_from_mock_mlflow(mock_mlflow, mock_physics_predictor):
-    """Tests that the predictor correctly loads a model from a mocked MLflow registry."""
-    mock_time_model = PicklableMockModel(return_value=10.0)
-    mock_energy_model = PicklableMockModel(return_value=20.0)
+    mock_time_model = MockModel(10.0)
+    mock_energy_model = MockModel(20.0)
     valid_model_dict = {'time_model': mock_time_model, 'energy_model': mock_energy_model}
+    joblib.dump(valid_model_dict, model_path)
     
-    mock_mlflow.sklearn.load_model.return_value = valid_model_dict
-    
-    predictor = EnergyTimePredictor()
-    predictor.fallback_predictor = mock_physics_predictor
-    
-    assert predictor.models is not None
-    mock_mlflow.sklearn.load_model.assert_called_once_with("models:/drone-energy-time-predictor/Production")
-    
-    time, energy = predictor.predict((0,0,0), (1,1,1), 1, np.zeros(3))
-    assert time == 10.0
-    assert energy == 20.0
-    mock_physics_predictor.predict.assert_not_called()
+    # Use patch to point the config constant to our temporary file
+    with patch('ml_predictor.predictor.MODEL_FILE_PATH', str(model_path)):
+        predictor = EnergyTimePredictor()
+        predictor.fallback_predictor = mock_physics_predictor
+        
+        assert predictor.models is not None
+        
+        time, energy = predictor.predict((0,0,0), (1,1,1), 1, np.zeros(3))
+        assert time == 10.0
+        assert energy == 20.0
+        mock_physics_predictor.predict.assert_not_called()
 
-@patch('ml_predictor.predictor.mlflow')
-def test_predictor_falls_back_if_mlflow_fails(mock_mlflow, mock_physics_predictor):
-    """Tests that the predictor falls back gracefully if MLflow throws an error."""
-    mock_mlflow.sklearn.load_model.side_effect = Exception("Registry not available")
+def test_predictor_falls_back_if_file_not_found(tmp_path, mock_physics_predictor):
+    """Tests that the predictor falls back gracefully if the model file does not exist."""
+    # Point the config to a file that doesn't exist in the temp directory
+    non_existent_path = tmp_path / "non_existent_model.joblib"
     
-    predictor = EnergyTimePredictor()
-    predictor.fallback_predictor = mock_physics_predictor
+    with patch('ml_predictor.predictor.MODEL_FILE_PATH', str(non_existent_path)):
+        predictor = EnergyTimePredictor()
+        predictor.fallback_predictor = mock_physics_predictor
 
-    assert predictor.models is None
-    
-    time, energy = predictor.predict((0,0,0), (1,1,1), 1, np.zeros(3))
-    assert time == 123.45
-    assert energy == 67.89
-    mock_physics_predictor.predict.assert_called_once()
+        assert predictor.models is None
+        
+        time, energy = predictor.predict((0,0,0), (1,1,1), 1, np.zeros(3))
+        assert time == 123.45
+        assert energy == 67.89
+        mock_physics_predictor.predict.assert_called_once()

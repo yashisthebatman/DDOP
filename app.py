@@ -8,7 +8,7 @@ from config import *
 from environment import *
 from ml_predictor.predictor import *
 from utils.coordinate_manager import *
-from planners.cbsh_planner import CBSHPlanner # MODIFIED: Using the new CBSH planner
+from planners.cbsh_planner import CBSHPlanner
 from planners.single_agent_planner import *
 from fleet.manager import *
 from fleet.cbs_components import *
@@ -44,7 +44,6 @@ def load_global_planners():
     env = Environment(WeatherSystem())
     predictor = EnergyTimePredictor()
     coord_manager = CoordinateManager()
-    # MODIFIED: Instantiate the new CBSHPlanner
     cbsh_planner = CBSHPlanner(env, coord_manager)
     single_agent_planner = SingleAgentPlanner(env, predictor, coord_manager)
     log_event("✅ Planners ready.")
@@ -52,7 +51,7 @@ def load_global_planners():
         "env": env,
         "predictor": predictor,
         "coord_manager": coord_manager,
-        "cbs_planner": cbsh_planner, # Key remains the same for compatibility
+        "cbs_planner": cbsh_planner,
         "single_agent_planner": single_agent_planner
     }
 
@@ -96,7 +95,7 @@ def setup_stage():
 
     if st.button("🚀 Plan Fleet Mission", type="primary", use_container_width=True):
         planners = st.session_state._global_planner_objects
-        st.session_state.fleet_manager = FleetManager(planners['cbs_planner'])
+        st.session_state.fleet_manager = FleetManager(planners['cbs_planner'], planners['predictor'])
         
         for i in range(st.session_state.num_drones):
             drone_id = f"Drone {i+1}"
@@ -119,12 +118,9 @@ def setup_stage():
             )
             st.session_state.fleet_manager.add_mission(mission)
 
-            # Initialize drone state
             st.session_state.drones[drone_id] = {
                 'pos': start_pos,
-                'battery': DRONE_BATTERY_WH,
-                'total_time': 0.0,
-                'total_energy': 0.0
+                'battery': DRONE_BATTERY_WH
             }
         st.session_state.stage = 'planning'
         st.rerun()
@@ -140,8 +136,11 @@ def planning_stage():
         st.session_state.stage = 'simulation'
         st.rerun()
     else:
+        log_event("❌ Fleet planning failed. Some missions may be impossible.")
         st.error("Fleet planning failed. Check logs. Some missions may be impossible.")
-        st.button("New Mission", on_click=reset_simulation)
+        if st.button("New Mission", use_container_width=True):
+            reset_simulation()
+            st.rerun()
 
 def simulation_stage():
     st.header("Fleet Mission Simulation")
@@ -160,14 +159,14 @@ def simulation_stage():
         st.subheader("Fleet Status")
         for drone_id, mission in st.session_state.fleet_manager.missions.items():
             with st.expander(f"{drone_id} ({mission.state})", expanded=True):
-                # MODIFIED: Progress is now based on simulation time vs total planned time
-                total_planned_time = mission.path[-1][1] if mission.path else 1
+                total_planned_time = mission.total_planned_time if mission.total_planned_time > 0 else 1
                 sim_time = st.session_state.simulation_time
                 progress = min(sim_time / total_planned_time, 1.0)
                 st.progress(progress, text=f"Time: {sim_time:.0f}s / {total_planned_time:.0f}s")
                 
                 battery_rem = st.session_state.drones[drone_id]['battery']
-                st.metric("Battery", f"{battery_rem:.2f} Wh", delta_color="inverse")
+                energy_delta = -mission.total_planned_energy
+                st.metric("Battery", f"{battery_rem:.2f} Wh", delta=f"{energy_delta:.2f} Wh (plan)", delta_color="inverse")
         
         if st.button("⬅️ New Mission", use_container_width=True):
             reset_simulation()
@@ -182,7 +181,6 @@ def simulation_stage():
         drone_colors = ['red', 'blue', 'green', 'orange', 'purple']
         for i, (drone_id, mission) in enumerate(st.session_state.fleet_manager.missions.items()):
             color = drone_colors[i % len(drone_colors)]
-            # Path for rendering is now in path_world_coords
             path_np = np.array(mission.path_world_coords)
             if path_np.any():
                 fig.add_trace(go.Scatter3d(x=path_np[:,0], y=path_np[:,1], z=path_np[:,2], mode='lines', line=dict(color=color, width=4), name=f'{drone_id} Path'))
@@ -197,6 +195,40 @@ def simulation_stage():
         st.subheader("Event Log")
         st.dataframe(pd.DataFrame(st.session_state.log, columns=["Log Entry"]), height=200, use_container_width=True)
 
+    # --- Simulation Loop ---
+    if st.session_state.simulation_running:
+        max_duration = max((m.total_planned_time for m in st.session_state.fleet_manager.missions.values()), default=0)
+
+        if st.session_state.simulation_time < max_duration:
+            st.session_state.simulation_time += SIMULATION_TIME_STEP
+
+            for drone_id, mission in st.session_state.fleet_manager.missions.items():
+                if not mission.path_world_coords: continue
+                
+                total_time = mission.total_planned_time
+                progress = min(st.session_state.simulation_time / total_time, 1.0) if total_time > 0 else 1.0
+
+                path_len = len(mission.path_world_coords)
+                path_index = int(progress * (path_len - 1))
+                
+                if path_index < path_len - 1:
+                    p1 = np.array(mission.path_world_coords[path_index])
+                    p2 = np.array(mission.path_world_coords[path_index + 1])
+                    segment_progress = (progress * (path_len - 1)) - path_index
+                    new_pos = p1 + segment_progress * (p2 - p1)
+                    st.session_state.drones[drone_id]['pos'] = tuple(new_pos)
+                else:
+                    st.session_state.drones[drone_id]['pos'] = mission.path_world_coords[-1]
+                
+                energy_consumed = progress * mission.total_planned_energy
+                st.session_state.drones[drone_id]['battery'] = DRONE_BATTERY_WH - energy_consumed
+
+            time.sleep(SIMULATION_UI_REFRESH_INTERVAL)
+            st.rerun()
+        else:
+            log_event("🏁 Simulation complete.")
+            st.session_state.simulation_running = False
+            st.rerun()
 
 # --- Main Application Logic ---
 def main():
@@ -208,8 +240,6 @@ def main():
     
     st.session_state._global_planner_objects = load_global_planners()
 
-    # FIX: The file was truncated here, causing a SyntaxError.
-    # This completes the control flow for the different application stages.
     if st.session_state.stage == 'setup':
         setup_stage()
     elif st.session_state.stage == 'planning':
@@ -217,6 +247,5 @@ def main():
     elif st.session_state.stage == 'simulation':
         simulation_stage()
 
-# Standard entry point for Python applications
 if __name__ == "__main__":
     main()

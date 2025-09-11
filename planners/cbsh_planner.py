@@ -124,7 +124,6 @@ class CBSHPlanner:
         for t in range(max_time + 1):
             positions_at_t = []
             for agent_id in agent_ids:
-                # Ensure interpolated position for time t exists and is not None
                 if t < len(interpolated_paths[agent_id]) and interpolated_paths[agent_id][t] is not None:
                     positions_at_t.append((agent_id, interpolated_paths[agent_id][t]))
 
@@ -164,5 +163,6 @@ class CBSHPlanner:
                     interp_pos = tuple(np.array(p1) + progress * (np.array(p2) - np.array(p1)))
                     full_path[t1 + t_step] = interp_pos
         
-        full_path[max_time] = timed_path[-1][0]
+        if max_time < len(full_path):
+            full_path[max_time] = timed_path[-1][0]
         return full_path
