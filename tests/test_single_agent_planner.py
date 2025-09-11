@@ -1,61 +1,56 @@
+# FILE: tests/test_single_agent_planner.py
 import pytest
-import numpy as np
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from planners.single_agent_planner import SingleAgentPlanner
-from ml_predictor.predictor import EnergyTimePredictor
 from environment import Environment
-from utils.geometry import line_segment_intersects_aabb
 from utils.coordinate_manager import CoordinateManager
 
 @pytest.fixture
-def mock_predictor():
-    return MagicMock(spec=EnergyTimePredictor)
-
-@pytest.fixture
-def mock_coord_manager():
-    return MagicMock(spec=CoordinateManager)
-
-@pytest.fixture
-def clear_environment():
+def mock_env():
     env = MagicMock(spec=Environment)
     env.is_point_obstructed.return_value = False
     env.is_line_obstructed.return_value = False
     return env
 
-def test_replan_grid_scales_with_obstacle(mock_predictor, clear_environment):
-    """
-    Tests that the dynamic grid sizing logic is called with appropriate parameters.
-    """
-    coord_manager = CoordinateManager() # Use a real one to test its state changes
-    # Spy on the method to see what it's called with
-    coord_manager.set_local_grid_origin = MagicMock()
+@pytest.fixture
+def planner(mock_env):
+    coord_manager = CoordinateManager() # Use a real one
+    predictor_mock = MagicMock()
+    return SingleAgentPlanner(mock_env, predictor_mock, coord_manager)
 
-    planner = SingleAgentPlanner(clear_environment, mock_predictor, coord_manager)
-    
-    # Mock the D* Lite part to prevent full execution
-    planner._find_tactical_detour = MagicMock(return_value=(None, "mocked"))
+@patch('planners.single_agent_planner.AnytimeRRTStar')
+def test_replan_uses_local_rrt(mock_rrt, planner):
+    """
+    Tests that the tactical replan identifies a safe goal and calls a
+    local RRT* to generate a detour.
+    """
+    # Mock the RRT* planner to return a simple detour
+    mock_rrt.return_value.plan.return_value = ([(0,0,100), (450, 50, 100), (500,0,100)], "Success")
 
     drone_pos = (0, 0, 100)
-    stale_path = [drone_pos, (1000, 0, 100)]
-    # A large new obstacle
-    new_obstacle_bounds = (400, -200, 50, 600, 200, 150)
+    stale_path = [drone_pos, (250, 0, 100), (500, 0, 100), (750, 0, 100), (1000, 0, 100)]
+    new_obstacle_bounds = (200, -50, 50, 300, 50, 150) # Blocks the (250,0,100) waypoint
 
-    planner.perform_hybrid_replan(
+    new_path, status = planner.perform_hybrid_replan(
         current_pos=drone_pos,
         stale_path=stale_path,
         new_obstacle_bounds=new_obstacle_bounds
     )
+
+    assert status == "Hybrid replan successful."
+    assert new_path is not None
     
-    # Check that D* Lite was called
-    assert planner._find_tactical_detour.call_count == 1
+    # Check that RRT* was called to plan from current pos to the first safe point (500,0,100)
+    mock_rrt.assert_called_once()
+    args, _ = mock_rrt.call_args
+    assert args[0] == drone_pos         # start
+    assert args[1] == (500, 0, 100)  # tactical_goal
     
-    # Check that the grid was dynamically resized
-    assert coord_manager.set_local_grid_origin.call_count == 1
-    args, _ = coord_manager.set_local_grid_origin.call_args
-    grid_center_world, grid_size_m = args
-    
-    # The grid size should be ~1.5x the path length (1000m)
-    assert grid_size_m == pytest.approx(1500)
-    # The center should be halfway along the path
-    assert grid_center_world[0] == pytest.approx(500)
+    # Check that the path was spliced correctly
+    # Expected: [(0,0,100), (450, 50, 100)] from detour + [(500,0,100), (750,0,100), (1000,0,100)] from original
+    assert new_path[0] == (0,0,100)
+    assert new_path[1] == (450, 50, 100)
+    assert new_path[2] == (500, 0, 100)
+    assert new_path[4] == (1000, 0, 100)
+    assert len(new_path) == 5

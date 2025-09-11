@@ -8,7 +8,7 @@ from config import *
 from environment import *
 from ml_predictor.predictor import *
 from utils.coordinate_manager import *
-from planners.cbs_planner import *
+from planners.cbsh_planner import CBSHPlanner # MODIFIED: Using the new CBSH planner
 from planners.single_agent_planner import *
 from fleet.manager import *
 from fleet.cbs_components import *
@@ -44,14 +44,15 @@ def load_global_planners():
     env = Environment(WeatherSystem())
     predictor = EnergyTimePredictor()
     coord_manager = CoordinateManager()
-    cbs_planner = CBSPlanner(env, coord_manager)
+    # MODIFIED: Instantiate the new CBSHPlanner
+    cbsh_planner = CBSHPlanner(env, coord_manager)
     single_agent_planner = SingleAgentPlanner(env, predictor, coord_manager)
     log_event("✅ Planners ready.")
     return {
         "env": env,
         "predictor": predictor,
         "coord_manager": coord_manager,
-        "cbs_planner": cbs_planner,
+        "cbs_planner": cbsh_planner, # Key remains the same for compatibility
         "single_agent_planner": single_agent_planner
     }
 
@@ -131,7 +132,7 @@ def setup_stage():
 def planning_stage():
     log_event("Fleet planning initiated...")
     fm = st.session_state.fleet_manager
-    with st.spinner("CBS planner coordinating conflict-free routes for the fleet..."):
+    with st.spinner("CBSH planner coordinating conflict-free routes for the fleet..."):
         success = fm.execute_planning_cycle()
     
     if success:
@@ -159,8 +160,12 @@ def simulation_stage():
         st.subheader("Fleet Status")
         for drone_id, mission in st.session_state.fleet_manager.missions.items():
             with st.expander(f"{drone_id} ({mission.state})", expanded=True):
-                progress = (mission.path_progress_index / len(mission.path_world_coords)) if mission.path_world_coords else 0
-                st.progress(progress, text=f"{progress:.0%}")
+                # MODIFIED: Progress is now based on simulation time vs total planned time
+                total_planned_time = mission.path[-1][1] if mission.path else 1
+                sim_time = st.session_state.simulation_time
+                progress = min(sim_time / total_planned_time, 1.0)
+                st.progress(progress, text=f"Time: {sim_time:.0f}s / {total_planned_time:.0f}s")
+                
                 battery_rem = st.session_state.drones[drone_id]['battery']
                 st.metric("Battery", f"{battery_rem:.2f} Wh", delta_color="inverse")
         
@@ -177,6 +182,7 @@ def simulation_stage():
         drone_colors = ['red', 'blue', 'green', 'orange', 'purple']
         for i, (drone_id, mission) in enumerate(st.session_state.fleet_manager.missions.items()):
             color = drone_colors[i % len(drone_colors)]
+            # Path for rendering is now in path_world_coords
             path_np = np.array(mission.path_world_coords)
             if path_np.any():
                 fig.add_trace(go.Scatter3d(x=path_np[:,0], y=path_np[:,1], z=path_np[:,2], mode='lines', line=dict(color=color, width=4), name=f'{drone_id} Path'))
@@ -195,7 +201,7 @@ def simulation_stage():
 # --- Main Application Logic ---
 def main():
     st.set_page_config(layout="wide", page_title="Multi-Agent Drone Planner")
-    st.title("🚁 Multi-Agent CBS Fleet Planner")
+    st.title("🚁 Multi-Agent CBSH Fleet Planner")
 
     if 'stage' not in st.session_state:
         initialize_state()
@@ -204,60 +210,4 @@ def main():
 
     if st.session_state.stage == 'setup':
         setup_stage()
-    elif st.session_state.stage == 'planning':
-        planning_stage()
-    elif st.session_state.stage == 'simulation':
-        simulation_stage()
-
-    # Core simulation loop
-    if st.session_state.get('simulation_running', False):
-        fm = st.session_state.fleet_manager
-        planners = st.session_state._global_planner_objects
-        time_step = 1.0 # Simulate 1 second at a time
-        
-        # Advance drones
-        for drone_id, mission in fm.missions.items():
-            if mission.state == "IN_PROGRESS":
-                path = mission.path_world_coords
-                idx = mission.path_progress_index
-                
-                if idx < len(path) - 1:
-                    p_current = path[idx]
-                    p_next = path[idx + 1]
-                    wind = planners['env'].weather.get_wind_at_location(*p_current)
-                    
-                    time_leg, energy_leg = planners['predictor'].predict(p_current, p_next, mission.payload_kg, wind)
-
-                    st.session_state.drones[drone_id]['pos'] = p_next
-                    st.session_state.drones[drone_id]['battery'] -= energy_leg
-                    st.session_state.drones[drone_id]['total_energy'] += energy_leg
-                    st.session_state.drones[drone_id]['total_time'] += time_leg
-                    mission.path_progress_index += 1
-                else:
-                    mission.state = "WAITING_FOR_FLEET"
-                    log_event(f"{drone_id} has completed its leg and is waiting.")
-        
-        # Check for mission synchronization
-        if fm.check_if_all_legs_complete():
-            log_event("All drones completed their legs. Advancing to next stage.")
-            all_missions_finished = True
-            for mission in fm.missions.values():
-                mission.advance_leg()
-                if not mission.is_complete():
-                    all_missions_finished = False
-            
-            if all_missions_finished:
-                log_event("✅ All fleet missions complete!")
-                st.session_state.simulation_running = False
-            else:
-                log_event("Planning next set of mission legs...")
-                st.session_state.stage = 'planning' # Trigger replan for next leg
-                st.session_state.simulation_running = False
-
-        planners['env'].update_environment(st.session_state.simulation_time, time_step)
-        st.session_state.simulation_time += time_step
-        time.sleep(0.1)
-        st.rerun()
-
-if __name__ == '__main__':
-    main()
+    elif st.session_state.stage == 'p
