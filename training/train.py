@@ -70,8 +70,8 @@ def main():
         time_preds = time_model.predict(X_test)
         energy_preds = energy_model.predict(X_test)
 
-        # FIX: The 'squared' argument for mean_squared_error requires scikit-learn >= 0.22.
-        # This implementation is backward-compatible with older versions.
+        # The 'squared=False' argument for mean_squared_error is not universally
+        # available in all scikit-learn versions. This method is backward-compatible.
         time_mse = mean_squared_error(y_time_test, time_preds)
         energy_mse = mean_squared_error(y_energy_test, energy_preds)
 

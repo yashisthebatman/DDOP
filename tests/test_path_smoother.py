@@ -9,11 +9,10 @@ def smoother():
 
 def test_smoothing_returns_more_points(smoother):
     """Smoothed path should be denser than the original grid path."""
-    path = [(0,0,10), (10,0,10), (10,10,10)]
+    path = [(0,0,10), (10,0,10), (10,10,10), (20, 10, 10)]
     env_mock = MagicMock()
-    # FIX: The test was failing because the mock was not configured.
-    # A call to env_mock.is_line_obstructed() returns a new MagicMock, which is
-    # truthy. Explicitly set the return value to False for a clear path.
+    # Mock must be configured to return False, otherwise the smoother will
+    # think the smoothed path is obstructed and revert to the original.
     env_mock.is_line_obstructed.return_value = False
     smoothed_path = smoother.smooth_path(path, env_mock)
     assert len(smoothed_path) > len(path)

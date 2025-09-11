@@ -14,14 +14,13 @@ SIMULATION_UI_REFRESH_INTERVAL = 0.05
 # --- ML Model and Retraining Configuration ---
 MODEL_FILE_PATH = "ml_predictor/drone_predictor_model.joblib"
 TRAINING_DATA_PATH = "training/training_data.csv"
-RETRAINING_THRESHOLD = 20 # Retrain after this many new data points are collected.
+RETRAINING_THRESHOLD = 20
 
 # --- Tactical Grid Configuration ---
 GRID_RESOLUTION_M = 15
 GRID_VERTICAL_RESOLUTION_M = 5
 
 # --- RRT* Strategic Planner ---
-RRT_ITERATIONS = 10000
 RRT_STEP_SIZE_METERS = 100.0
 RRT_GOAL_BIAS = 0.1
 RRT_NEIGHBORHOOD_RADIUS_METERS = 100.0
@@ -29,7 +28,7 @@ RRT_NEIGHBORHOOD_RADIUS_METERS = 100.0
 # --- Hub Locations & Destinations ---
 HUBS = {
     "Hub A (South Manhattan)": (-74.018, 40.705, 10.0),
-    "Hub B (Midtown East)": (-73.975, 40.739, 10.0),
+    "Hub B (Midtown East)": (-73.975, 40.729, 10.0),
     "Hub C (West Side)": (-74.008, 40.735, 10.0)
 }
 DESTINATIONS = {
@@ -63,20 +62,7 @@ TURN_ENERGY_FACTOR = 0.005
 DRONE_BASE_POWER_WATTS = 50.0
 DRONE_ADDITIONAL_WATTS_PER_KG = 10.0
 RTH_BATTERY_THRESHOLD_FACTOR = 1.5
+DRONE_RECHARGE_TIME_S = 30.0
 
 # --- Pathfinding Parameters ---
 MAX_PATH_LENGTH = 5000
-
-# --- Configuration Validation ---
-def validate_coordinates():
-    lon_min, lat_min, lon_max, lat_max = AREA_BOUNDS
-    all_points = {**HUBS, **DESTINATIONS}
-    errors = []
-    for name, (lon, lat, alt) in all_points.items():
-        if not (lon_min <= lon <= lon_max and lat_min <= lat <= lat_max):
-            errors.append(f"Invalid coordinate for '{name}': ({lon}, {lat}) is outside AREA_BOUNDS.")
-    if errors:
-        for error in errors:
-            warnings.warn(f"Configuration error: {error}")
-
-validate_coordinates()

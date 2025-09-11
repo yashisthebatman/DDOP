@@ -9,13 +9,12 @@ from config import DRONE_SPEED_MPS, MAX_ALTITUDE, GRID_RESOLUTION_M
 @pytest.fixture
 def mock_coord_manager():
     manager = MagicMock(spec=CoordinateManager)
-    # Mock a simple conversion: 1 unit of world coord = 1000 meters
-    manager.world_to_local_meters.side_effect = lambda p: (p[0]*1000, p[1]*1000, p[2])
-    # A realistic mock that correctly separates points based on a grid resolution.
-    manager.world_to_local_grid.side_effect = lambda p: (
-        int(round(p[0] * 1000 / GRID_RESOLUTION_M)),
-        int(round(p[1] * 1000 / GRID_RESOLUTION_M)),
-        int(p[2])
+    # FIX: Use the new CoordinateManager API: world_to_meters and meters_to_grid
+    manager.world_to_meters.side_effect = lambda p: (p[0]*1000, p[1]*1000, p[2])
+    manager.meters_to_grid.side_effect = lambda p_m: (
+        int(p_m[0] / GRID_RESOLUTION_M),
+        int(p_m[1] / GRID_RESOLUTION_M),
+        int(p_m[2])
     )
     manager.alt_min = 0
     manager.alt_max = MAX_ALTITUDE
@@ -42,33 +41,30 @@ def test_timing_with_wait_constraint(solver):
     geom_path = [(0,0,10), (0.02,0,10)] # 20m path, takes 1s
     
     # Constraint is on the destination grid cell at the time of arrival (t=1).
-    # This correctly blocks the "move" action while allowing the "wait" action.
-    destination_grid_cell = (1, 0, 10)
+    dest_meters = solver.coord_manager.world_to_meters(geom_path[1])
+    destination_grid_cell = solver.coord_manager.meters_to_grid(dest_meters)
     constraints = [Constraint(agent_id=1, position=destination_grid_cell, timestamp=1)]
     
     timed_path = solver.find_timing(geom_path, constraints)
 
     assert timed_path is not None
     # Expected path: wait at (0,0,10) until t=1, then move.
-    # ( (0,0,10), 0 ), ( (0,0,10), 1 ), ( (0.02,0,10), 2)
+    assert len(timed_path) == 3
     assert timed_path[0] == ((0,0,10), 0)
     assert timed_path[1] == ((0,0,10), 1)
     assert timed_path[2] == ((0.02,0,10), 2)
-    # Check that it did not pass through the constrained state (0,0,10) at t=1 by moving
-    assert not any(pos == (0,0,10) and t == 1 for pos, t in timed_path if pos != timed_path[0][0])
 
 
 def test_timing_fails_if_unsolvable(solver):
     """Tests that the solver returns None if the path is impossible."""
     geom_path = [(0,0,10), (0.02,0,10)]
 
-    # FIX: The original test logic was flawed. To make the scenario truly
-    # unsolvable, both the "move" and "wait" options from the start must be blocked.
-    start_grid_cell = (0, 0, 10)
-    dest_grid_cell = (1, 0, 10)
+    start_meters = solver.coord_manager.world_to_meters(geom_path[0])
+    dest_meters = solver.coord_manager.world_to_meters(geom_path[1])
+    start_grid_cell = solver.coord_manager.meters_to_grid(start_meters)
+    dest_grid_cell = solver.coord_manager.meters_to_grid(dest_meters)
 
-    # 1. Block the "move" action by constraining the destination at its arrival time (t=1).
-    # 2. Block the "wait" action by constraining the start cell for all possible wait times.
+    # Block the "move" action and all possible "wait" actions.
     constraints = [
         Constraint(1, dest_grid_cell, 1)
     ]

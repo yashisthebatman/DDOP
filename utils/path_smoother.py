@@ -10,11 +10,11 @@ class PathSmoother:
         """Generates a smooth B-spline path and discretizes it."""
         num_points_in_path = len(path)
         
-        # FIX: The spline degree 'k' must be less than the number of points 'm'.
-        # Dynamically adjust k for short paths to prevent scipy error.
         if num_points_in_path < 2:
             return path
         
+        # The spline degree 'k' must be less than the number of points.
+        # We dynamically adjust k for short paths to prevent a scipy error.
         # k must be 1, 2, or 3. Max possible k is num_points - 1.
         spline_degree = min(num_points_in_path - 1, 3)
 
@@ -23,9 +23,8 @@ class PathSmoother:
 
         try:
             path_np = np.array(path).T
-            # FIX: Changed smoothing factor s=2.0 to s=0. This forces interpolation
-            # through all points, ensuring a denser path is generated from sparse
-            # waypoints, which is the function's intent.
+            # A smoothing factor of s=0 forces interpolation through all points,
+            # ensuring a denser path is generated from the original waypoints.
             tck, u = splprep(path_np, s=0, k=spline_degree)
             
             num_points_out = max(num_points_in_path * 5, 20)

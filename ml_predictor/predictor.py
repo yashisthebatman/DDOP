@@ -2,6 +2,7 @@ import numpy as np
 import os
 import joblib
 import logging
+import pandas as pd
 
 from config import (
     DRONE_SPEED_MPS, DRONE_VERTICAL_SPEED_MPS, DRONE_MASS_KG, DRONE_BASE_POWER_WATTS,
@@ -49,6 +50,12 @@ class EnergyTimePredictor:
     def __init__(self):
         self.models = None
         self.fallback_predictor = PhysicsBasedPredictor()
+        # Define feature names to ensure consistency between training and prediction
+        self.feature_names = [
+            'distance_3d', 'altitude_change', 'horizontal_distance', 'payload_kg',
+            'wind_speed', 'wind_alignment', 'turning_angle', 'start_altitude', 
+            'end_altitude', 'abs_altitude_change'
+        ]
         self.load_model()
 
     def load_model(self):
@@ -70,9 +77,14 @@ class EnergyTimePredictor:
             return self.fallback_predictor.predict(p1, p2, payload_kg, wind_vector, p_prev)
         try:
             features = self._extract_features(p1, p2, payload_kg, wind_vector, p_prev)
-            features_2d = np.array(features).reshape(1, -1)
-            time_pred = self.models['time_model'].predict(features_2d)[0]
-            energy_pred = self.models['energy_model'].predict(features_2d)[0]
+            
+            # FIX: Create a named DataFrame to prevent scikit-learn UserWarning
+            # and ensure robust prediction by matching feature names.
+            features_df = pd.DataFrame([features], columns=self.feature_names)
+            
+            time_pred = self.models['time_model'].predict(features_df)[0]
+            energy_pred = self.models['energy_model'].predict(features_df)[0]
+            
             return max(0, time_pred), max(0, energy_pred)
         except Exception as e:
             logging.warning(f"Error during ML prediction: {e}. Using fallback.")
@@ -92,6 +104,8 @@ class EnergyTimePredictor:
             v1 = np.array(p1) - np.array(p_prev)
             if np.linalg.norm(v1) > 0 and np.linalg.norm(flight_vector) > 0:
                 turning_angle = np.degrees(calculate_vector_angle_3d(v1, flight_vector))
+        
+        # The order here must exactly match self.feature_names
         return [
             distance_3d, altitude_change, horizontal_distance, payload_kg,
             wind_speed, wind_alignment, turning_angle, p1[2], p2[2], abs(altitude_change)

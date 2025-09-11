@@ -1,7 +1,6 @@
 import pytest
 import numpy as np
 from ml_predictor.predictor import PhysicsBasedPredictor
-# FIX: Import constants from config to use in tests, making them robust.
 from config import DRONE_SPEED_MPS, DRONE_VERTICAL_SPEED_MPS
 
 @pytest.fixture
@@ -22,7 +21,6 @@ def test_horizontal_flight(predictor):
     p2 = (1000, 0, 100) # 1km flight
     time, energy = predictor.predict(p1, p2, payload_kg=1.0, wind_vector=np.array([0,0,0]))
     
-    # FIX: Use the imported constant for the assertion.
     assert time == pytest.approx(1000 / DRONE_SPEED_MPS)
     assert energy > 0
 
@@ -35,7 +33,6 @@ def test_vertical_flight(predictor):
     time_up, energy_up = predictor.predict(p1, p_up, 1.0, np.array([0,0,0]))
     time_down, energy_down = predictor.predict(p1, p_down, 1.0, np.array([0,0,0]))
 
-    # FIX: Use the imported constant for the assertion.
     assert time_up == pytest.approx(100 / DRONE_VERTICAL_SPEED_MPS)
     assert energy_up > energy_down
     assert energy_down > 0 # Descending still requires power to control

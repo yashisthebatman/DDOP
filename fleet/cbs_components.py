@@ -28,9 +28,6 @@ class Conflict:
     """Represents a collision between two agents."""
     agent1_id: AgentID
     agent2_id: AgentID
-    # FIX: A conflict now stores both agent positions to allow for more intelligent
-    # constraint generation, which is necessary to prevent infinite loops when
-    # dealing with proximity (continuous space) conflicts.
     agent1_pos: GridPosition
     agent2_pos: GridPosition
     timestamp: int
