@@ -28,8 +28,17 @@ class Conflict:
     """Represents a collision between two agents."""
     agent1_id: AgentID
     agent2_id: AgentID
-    position: GridPosition # Conflicts are detected on the discrete grid for simplicity
+    # FIX: A conflict now stores both agent positions to allow for more intelligent
+    # constraint generation, which is necessary to prevent infinite loops when
+    # dealing with proximity (continuous space) conflicts.
+    agent1_pos: GridPosition
+    agent2_pos: GridPosition
     timestamp: int
+
+    @property
+    def is_vertex_conflict(self) -> bool:
+        """Returns true if both agents are in the same grid cell."""
+        return self.agent1_pos == self.agent2_pos
 
 @dataclass
 class CTNode:

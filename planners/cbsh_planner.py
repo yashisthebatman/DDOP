@@ -60,27 +60,35 @@ class CBSHPlanner:
                 logging.info(f"CBSH search complete. Solution found with cost {p_node.cost}.")
                 return p_node.solution
 
-            a1_id, a2_id = conflict.agent1_id, conflict.agent2_id
+            # --- FIX: Break the symmetry that causes infinite loops ---
+            # Instead of creating a branch for each agent in the conflict (which can lead to
+            # oscillations in symmetrical scenarios), we create a single new branch by
+            # constraining only one of the agents (e.g., the one with the smaller ID).
+            # This forces the planner to make a decisive move, breaking the loop.
             
-            for agent_id in [a1_id, a2_id]:
-                agent_to_constrain = self.agents_map.get(agent_id)
-                if not agent_to_constrain: continue
+            agent_ids_in_conflict = sorted([conflict.agent1_id, conflict.agent2_id])
+            agent_id_to_constrain = agent_ids_in_conflict[0] # Arbitrarily pick the first agent
 
-                new_constraints = p_node.constraints.copy()
-                new_constraint = Constraint(agent_id, conflict.position, conflict.timestamp)
-                new_constraints.add(new_constraint)
+            agent_to_constrain = self.agents_map.get(agent_id_to_constrain)
+            if not agent_to_constrain: continue
 
-                agent_specific_constraints = [c for c in new_constraints if c.agent_id == agent_id]
+            constraint_pos = conflict.agent1_pos if agent_id_to_constrain == conflict.agent1_id else conflict.agent2_pos
+
+            new_constraints = p_node.constraints.copy()
+            new_constraint = Constraint(agent_id_to_constrain, constraint_pos, conflict.timestamp)
+            new_constraints.add(new_constraint)
+
+            agent_specific_constraints = [c for c in new_constraints if c.agent_id == agent_id_to_constrain]
+            
+            new_timed_path = self._find_path_for_agent(agent_to_constrain, agent_specific_constraints)
+
+            if new_timed_path:
+                new_solution = p_node.solution.copy()
+                new_solution[agent_id_to_constrain] = new_timed_path
                 
-                new_timed_path = self._find_path_for_agent(agent_to_constrain, agent_specific_constraints)
-
-                if new_timed_path:
-                    new_solution = p_node.solution.copy()
-                    new_solution[agent_id] = new_timed_path
-                    
-                    child = CTNode(constraints=new_constraints, solution=new_solution)
-                    child.cost = self._calculate_solution_cost(child.solution)
-                    heapq.heappush(open_set, child)
+                child = CTNode(constraints=new_constraints, solution=new_solution)
+                child.cost = self._calculate_solution_cost(child.solution)
+                heapq.heappush(open_set, child)
                     
         logging.warning("CBSH search exhausted. No solution found.")
         return None
@@ -128,17 +136,21 @@ class CBSHPlanner:
                     positions_at_t.append((agent_id, interpolated_paths[agent_id][t]))
 
             for (id1, pos1), (id2, pos2) in combinations(positions_at_t, 2):
-                # FIX: The original conflict detection used continuous distance (MIN_SEPARATION_METERS), 
-                # but the constraints are discrete (grid-based). This mismatch caused an infinite 
-                # loop where the planner would find a proximity conflict that its vertex-based 
-                # constraints could not resolve.
-                # This new logic detects conflicts only when agents are in the same grid cell,
-                # which is consistent with the constraints the planner can create.
                 grid_pos1 = self.coord_manager.world_to_local_grid(pos1)
                 grid_pos2 = self.coord_manager.world_to_local_grid(pos2)
+
+                if not grid_pos1 or not grid_pos2: continue
                 
-                if grid_pos1 and grid_pos1 == grid_pos2:
-                    conflicts.append(Conflict(id1, id2, grid_pos1, t))
+                # Check for vertex conflict (same grid cell)
+                if grid_pos1 == grid_pos2:
+                    conflicts.append(Conflict(id1, id2, grid_pos1, grid_pos2, t))
+                    continue # Avoid adding the same conflict twice
+
+                # Check for proximity conflict (violating separation distance)
+                pos1_m = self.coord_manager.world_to_local_meters(pos1)
+                pos2_m = self.coord_manager.world_to_local_meters(pos2)
+                if calculate_distance_3d(pos1_m, pos2_m) < MIN_SEPARATION_METERS:
+                    conflicts.append(Conflict(id1, id2, grid_pos1, grid_pos2, t))
 
         return min(conflicts, key=lambda c: c.timestamp) if conflicts else None
 

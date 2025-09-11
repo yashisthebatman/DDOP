@@ -1,7 +1,7 @@
 # FILE: tests/test_cbsh_planner.py
 import pytest
 from unittest.mock import MagicMock, patch
-from fleet.cbs_components import Agent
+from fleet.cbs_components import Agent, Conflict, Constraint
 from planners.cbsh_planner import CBSHPlanner, MIN_SEPARATION_METERS
 
 @pytest.fixture
@@ -30,7 +30,6 @@ def cbsh_planner(mock_low_level_planners):
     coord_manager_mock = MagicMock()
     # Mock grid conversion to simple integer truncation
     coord_manager_mock.world_to_local_grid.side_effect = lambda p: (int(p[0]), int(p[1]), int(p[2]))
-    # FIX: The mock was incomplete. The planner's conflict detection requires this method.
     coord_manager_mock.world_to_local_meters.side_effect = lambda p: p
     
     planner = CBSHPlanner(env_mock, coord_manager_mock)
@@ -43,25 +42,35 @@ def test_solves_head_on_conflict(cbsh_planner, mock_low_level_planners):
     agent1 = Agent(id=1, start_pos=(0,0,0), goal_pos=(4,0,0), config={})
     agent2 = Agent(id=2, start_pos=(4,0,0), goal_pos=(0,0,0), config={})
 
-    # --- Configure Mocks for Conflict Scenario ---
+    # --- Define Default (conflicting) and Alternative (safe) Paths ---
+    path1_default = [((i,0,0), i) for i in range(5)]
+    path2_default = [((4-i,0,0), i) for i in range(5)]
+    path_alt_detour = [((0,0,0),0), ((1,0,0),1), ((1,20,0),2), ((2,20,0),3), ((3,0,0),4), ((4,0,0),5)]
+    path_alt_wait = [((4,0,0),0), ((3,0,0),1), ((3,0,0),2), ((2,0,0),3), ((1,0,0),4), ((0,0,0),5)]
+
+    # --- FIX: Create an intelligent mock that behaves like a real low-level planner ---
+    # This new mock checks if its default path violates any given constraints. If so,
+    # it returns a pre-defined safe alternative. This prevents the infinite loop.
     def timing_side_effect(geom_path, constraints):
-        # Agent 1's default path
-        if geom_path[0] == (0,0,0): 
-            path = [((i,0,0), i) for i in range(5)]
-            # If constrained, take a detour that is far enough away to be a valid resolution.
-            if any(c.position == (2,0,0) and c.timestamp == 2 for c in constraints):
-                # FIX: The original detour was still too close, causing the planner to find
-                # another conflict. This new detour moves the agent far away.
-                return [((0,0,0),0), ((1,0,0),1), ((1,20,0),2), ((2,20,0),3), ((3,0,0),4), ((4,0,0),5)]
-            return path
-        # Agent 2's default path
-        elif geom_path[0] == (4,0,0):
-            path = [((4-i,0,0), i) for i in range(5)]
-            # If constrained, wait. This is a valid strategy for the low-level planner to propose.
-            if any(c.position == (2,0,0) and c.timestamp == 2 for c in constraints):
-                return [((4,0,0),0), ((3,0,0),1), ((3,0,0),2), ((2,0,0),3), ((1,0,0),4), ((0,0,0),5)]
-            return path
-        return []
+        # Determine which agent is being planned for based on its start position
+        agent_id = 1 if geom_path[0] == agent1.start_pos else 2
+        
+        default_path = path1_default if agent_id == 1 else path2_default
+        alt_path = path_alt_detour if agent_id == 1 else path_alt_wait
+
+        is_violated = False
+        # Check if the default path violates any constraints specific to this agent
+        for c in constraints:
+            if c.agent_id == agent_id:
+                for pos, time in default_path:
+                    grid_pos = cbsh_planner.coord_manager.world_to_local_grid(pos)
+                    if grid_pos == c.position and time == c.timestamp:
+                        is_violated = True
+                        break
+            if is_violated:
+                break
+        
+        return alt_path if is_violated else default_path
 
     mock_timing_solver.find_timing.side_effect = timing_side_effect
     

@@ -18,8 +18,12 @@ def mock_env():
 def mock_coord_manager():
     """A mock CoordinateManager configured for RRT* tests."""
     manager = MagicMock(spec=CoordinateManager)
-    # Simulate a 1-to-1 mapping for meter-based calculations
-    manager.world_to_local_meters.side_effect = lambda p: np.array(p)
+    # FIX: The mock was incomplete. The AnytimeRRTStar planner uses both
+    # world_to_local_meters and local_meters_to_world. The missing mock
+    # for the latter caused node positions to be populated with MagicMock
+    # objects instead of coordinates, leading to a ValueError.
+    manager.world_to_local_meters.side_effect = lambda p: p
+    manager.local_meters_to_world.side_effect = lambda p: p
     manager.lon_deg_to_m = 1.0
     manager.lat_deg_to_m = 1.0
     return manager
