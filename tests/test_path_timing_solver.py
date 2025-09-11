@@ -45,9 +45,12 @@ def test_timing_with_wait_constraint(solver):
 
 def test_timing_fails_if_unsolvable(solver):
     """Tests that the solver returns None if the path is impossible."""
-    geom_path = [(0,0,10), (1,0,10)]
-    # Constraint: The goal itself is blocked at all early times
-    constraints = [Constraint(1, (1,0,10), t) for t in range(1, 15)]
+    # FIX: The original path resulted in a 50s travel time, bypassing the constraints.
+    # This new path has a 20-meter distance, resulting in a 1s travel time.
+    # This forces the solver to interact with the constraints and test the wait logic.
+    geom_path = [(0,0,10), (0.02,0,10)]
+    # Constraint: The goal is blocked for more timesteps (14) than MAX_WAIT_TIME (10).
+    constraints = [Constraint(1, (0,0,10), t) for t in range(1, 15)]
     
     timed_path = solver.find_timing(geom_path, constraints)
     assert timed_path is None

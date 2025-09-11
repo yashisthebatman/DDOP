@@ -28,7 +28,9 @@ def calculate_path_length(path):
     """Calculates the total Euclidean distance of a path."""
     if not path or len(path) < 2:
         return 0
-    return np.sum(np.linalg.norm(np.array(p2) - np.array(p1)) for p1, p2 in zip(path[:-1], path[1:]))
+    # FIX: Replaced the deprecated np.sum(generator) with Python's built-in sum().
+    # This is the recommended fix from the warning message and is more idiomatic here.
+    return sum(np.linalg.norm(np.array(p2) - np.array(p1)) for p1, p2 in zip(path[:-1], path[1:]))
 
 def test_finds_path_in_clear_environment(mock_env, mock_coord_manager):
     """Tests that a path can be found in a simple, unobstructed case."""

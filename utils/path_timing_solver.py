@@ -24,6 +24,23 @@ class PathTimingSolver:
     def __init__(self, coord_manager: CoordinateManager):
         self.coord_manager = coord_manager
 
+    def _get_consecutive_waits(self, state: State, came_from: Dict[State, State]) -> int:
+        """Helper to trace back and count consecutive wait states."""
+        wait_count = 0
+        current_s = state
+        current_idx = state[0]
+        
+        while current_s in came_from:
+            parent_s = came_from[current_s]
+            parent_idx = parent_s[0]
+            if parent_idx == current_idx:
+                wait_count += 1
+                current_s = parent_s
+            else:
+                # The parent was at a different waypoint, so this state was the result of a move.
+                break
+        return wait_count
+
     def find_timing(self, geometric_path: List[WorldPosition], constraints: List[Constraint]) -> Optional[List[Tuple[WorldPosition, int]]]:
         """
         Performs an A* search over the state space (waypoint_index, time) to find
@@ -59,7 +76,6 @@ class PathTimingSolver:
                 p1_world = geometric_path[current_idx]
                 p2_world = geometric_path[current_idx + 1]
                 
-                # FIX: Convert world coordinates to meters before calculating travel time.
                 p1_meters = self.coord_manager.world_to_local_meters(p1_world)
                 p2_meters = self.coord_manager.world_to_local_meters(p2_world)
                 dist_m = calculate_distance_3d(p1_meters, p2_meters)
@@ -84,8 +100,10 @@ class PathTimingSolver:
                         heapq.heappush(open_set, (f_score, neighbor_state))
 
             # 2. Action: Wait at the current waypoint
-            waited_time = current_time - g_score.get(came_from.get(current_state, (0,0)), 0)
-            if waited_time < MAX_WAIT_TIME:
+            # FIX: The original logic for checking wait time was flawed.
+            # This now correctly counts the total number of consecutive waits.
+            consecutive_waits = self._get_consecutive_waits(current_state, came_from)
+            if consecutive_waits < MAX_WAIT_TIME:
                 neighbor_time = current_time + 1
                 neighbor_idx = current_idx
                 neighbor_state: State = (neighbor_idx, neighbor_time)

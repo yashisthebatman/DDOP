@@ -208,6 +208,15 @@ def main():
     
     st.session_state._global_planner_objects = load_global_planners()
 
+    # FIX: The file was truncated here, causing a SyntaxError.
+    # This completes the control flow for the different application stages.
     if st.session_state.stage == 'setup':
         setup_stage()
-    elif st.session_state.stage == 'p
+    elif st.session_state.stage == 'planning':
+        planning_stage()
+    elif st.session_state.stage == 'simulation':
+        simulation_stage()
+
+# Standard entry point for Python applications
+if __name__ == "__main__":
+    main()

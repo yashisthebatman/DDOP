@@ -15,10 +15,13 @@ GRID_VERTICAL_RESOLUTION_M = 5 # Vertical resolution (in meters) for the grid
 
 # --- RRT* Strategic Planner (for single-agent RTH) ---
 
-RRT_ITERATIONS = 2500       # Number of nodes to try
-RRT_STEP_SIZE_METERS = 150.0  # How far to extend the tree in one step (in meters)
+# FIX: The original RRT* parameters were not well-suited for a dense,
+# obstacle-filled environment. A smaller step size is more likely to find
+# a path through the gaps between buildings.
+RRT_ITERATIONS = 5000       # Number of nodes to try (increased for more exploration)
+RRT_STEP_SIZE_METERS = 75.0  # How far to extend the tree in one step (decreased for finer navigation)
 RRT_GOAL_BIAS = 0.1         # Probability of sampling the goal point (0.0 to 1.0)
-RRT_NEIGHBORHOOD_RADIUS_METERS = 200.0 # Radius to search for rewiring (in meters)
+RRT_NEIGHBORHOOD_RADIUS_METERS = 100.0 # Radius to search for rewiring (decreased, but still > step_size)
 
 # --- Hub Locations & Destinations ---
 

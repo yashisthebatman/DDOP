@@ -14,8 +14,10 @@ from utils.path_timing_solver import PathTimingSolver
 from utils.geometry import calculate_distance_3d
 
 
-# Time budget for the low-level geometric planner in seconds
-LOW_LEVEL_TIME_BUDGET = 0.2
+# FIX: The original time budget was too low for the RRT* planner to reliably
+# find paths in the complex, obstacle-dense environment. Increasing it gives
+# the low-level planner a higher chance of success.
+LOW_LEVEL_TIME_BUDGET = 1.0
 # Drones must be at least this far apart to be considered conflict-free
 MIN_SEPARATION_METERS = 15.0
 
@@ -108,8 +110,8 @@ class CBSHPlanner:
 
     def _select_best_conflict(self, solution: Dict) -> Optional[Conflict]:
         """
-        Finds all conflicts by checking minimum separation distance in continuous
-        space and selects the one that occurs earliest in time.
+        Finds all conflicts by checking for agents in the same grid cell at the same time,
+        and selects the one that occurs earliest.
         """
         conflicts = []
         max_time = 0
@@ -122,17 +124,22 @@ class CBSHPlanner:
         for t in range(max_time + 1):
             positions_at_t = []
             for agent_id in agent_ids:
-                if t < len(interpolated_paths[agent_id]):
+                # Ensure interpolated position for time t exists and is not None
+                if t < len(interpolated_paths[agent_id]) and interpolated_paths[agent_id][t] is not None:
                     positions_at_t.append((agent_id, interpolated_paths[agent_id][t]))
 
             for (id1, pos1), (id2, pos2) in combinations(positions_at_t, 2):
-                pos1_m = self.coord_manager.world_to_local_meters(pos1)
-                pos2_m = self.coord_manager.world_to_local_meters(pos2)
+                # FIX: The original conflict detection used continuous distance (MIN_SEPARATION_METERS), 
+                # but the constraints are discrete (grid-based). This mismatch caused an infinite 
+                # loop where the planner would find a proximity conflict that its vertex-based 
+                # constraints could not resolve.
+                # This new logic detects conflicts only when agents are in the same grid cell,
+                # which is consistent with the constraints the planner can create.
+                grid_pos1 = self.coord_manager.world_to_local_grid(pos1)
+                grid_pos2 = self.coord_manager.world_to_local_grid(pos2)
                 
-                if calculate_distance_3d(pos1_m, pos2_m) < MIN_SEPARATION_METERS:
-                    conflict_pos_grid = self.coord_manager.world_to_local_grid(pos1)
-                    if conflict_pos_grid:
-                        conflicts.append(Conflict(id1, id2, conflict_pos_grid, t))
+                if grid_pos1 and grid_pos1 == grid_pos2:
+                    conflicts.append(Conflict(id1, id2, grid_pos1, t))
 
         return min(conflicts, key=lambda c: c.timestamp) if conflicts else None
 
