@@ -23,8 +23,10 @@ class PathSmoother:
 
         try:
             path_np = np.array(path).T
-            # Use the calculated spline_degree
-            tck, u = splprep(path_np, s=2.0, k=spline_degree)
+            # FIX: Changed smoothing factor s=2.0 to s=0. This forces interpolation
+            # through all points, ensuring a denser path is generated from sparse
+            # waypoints, which is the function's intent.
+            tck, u = splprep(path_np, s=0, k=spline_degree)
             
             num_points_out = num_points_in_path * 5
             u_new = np.linspace(u.min(), u.max(), num_points_out)

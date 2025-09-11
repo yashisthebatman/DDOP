@@ -2,6 +2,7 @@ import random
 import logging
 from typing import List, Tuple, Optional
 import numpy as np
+from scipy.spatial import KDTree
 
 from environment import Environment
 from utils.coordinate_manager import CoordinateManager
@@ -28,6 +29,11 @@ class RRTStar:
         self.goal_node = Node(goal)
         self.nodes = [self.start_node]
         self._create_sampling_bounds()
+        
+        # PERFORMANCE OPTIMIZATION: Use a KDTree for fast nearest neighbor searches.
+        # This changes the core algorithm from O(N^2) to O(N log N).
+        self.node_positions_m = [np.array(self.coord_manager.world_to_local_meters(start))]
+        self.kdtree = KDTree(self.node_positions_m)
 
     def _create_sampling_bounds(self):
         center_lon = (self.start_pos[0] + self.goal_pos[0]) / 2
@@ -50,11 +56,19 @@ class RRTStar:
             new_node_pos = self._steer(nearest_node.position, sample)
             if new_node_pos and self._is_collision_free(nearest_node.position, new_node_pos):
                 new_node = Node(new_node_pos, parent=nearest_node)
-                near_nodes = self._find_near_nodes(new_node)
+                near_node_indices = self._find_near_nodes(new_node)
+                near_nodes = [self.nodes[i] for i in near_node_indices]
+                
                 best_parent, min_cost = self._choose_best_parent(new_node, near_nodes)
                 new_node.parent, new_node.cost = best_parent, min_cost
+                
                 self.nodes.append(new_node)
+                # PERFORMANCE OPTIMIZATION: Update the KDTree with the new node position.
+                self.node_positions_m.append(np.array(self.coord_manager.world_to_local_meters(new_node.position)))
+                self.kdtree = KDTree(self.node_positions_m)
+
                 self._rewire_tree(new_node, near_nodes)
+
         if not self._connect_goal_to_tree():
             return None, "No strategic path found."
         return self._reconstruct_path(self.goal_node), "Path found successfully."
@@ -68,7 +82,9 @@ class RRTStar:
 
     def _get_nearest_node(self, sample: Tuple) -> Node:
         sample_m = np.array(self.coord_manager.world_to_local_meters(sample))
-        return min(self.nodes, key=lambda n: np.linalg.norm(np.array(self.coord_manager.world_to_local_meters(n.position)) - sample_m))
+        # PERFORMANCE OPTIMIZATION: Use the KDTree for an O(log N) search.
+        _, nearest_idx = self.kdtree.query(sample_m)
+        return self.nodes[nearest_idx]
 
     def _steer(self, from_pos: Tuple, to_sample: Tuple) -> Optional[Tuple]:
         from_m = np.array(self.coord_manager.world_to_local_meters(from_pos))
@@ -79,7 +95,6 @@ class RRTStar:
         target_dist = min(dist, RRT_STEP_SIZE_METERS)
         offset_m = (direction / dist) * target_dist
         
-        # Convert meter offset back to world coordinates
         new_lon = from_pos[0] + (offset_m[0] / self.coord_manager.lon_deg_to_m)
         new_lat = from_pos[1] + (offset_m[1] / self.coord_manager.lat_deg_to_m)
         new_alt = np.clip(from_pos[2] + offset_m[2], MIN_ALTITUDE, MAX_ALTITUDE)
@@ -88,9 +103,11 @@ class RRTStar:
     def _is_collision_free(self, p1: Tuple, p2: Tuple) -> bool:
         return not self.env.is_line_obstructed(p1, p2)
 
-    def _find_near_nodes(self, new_node: Node) -> List[Node]:
+    def _find_near_nodes(self, new_node: Node) -> List[int]:
         new_node_m = np.array(self.coord_manager.world_to_local_meters(new_node.position))
-        return [n for n in self.nodes if np.linalg.norm(np.array(self.coord_manager.world_to_local_meters(n.position)) - new_node_m) < RRT_NEIGHBORHOOD_RADIUS_METERS]
+        # PERFORMANCE OPTIMIZATION: Use KDTree to find neighbors in a radius, which is very fast.
+        indices = self.kdtree.query_ball_point(new_node_m, RRT_NEIGHBORHOOD_RADIUS_METERS)
+        return indices
 
     def _choose_best_parent(self, new_node: Node, near_nodes: List[Node]) -> Tuple[Node, float]:
         best_parent = new_node.parent
@@ -113,6 +130,8 @@ class RRTStar:
     def _connect_goal_to_tree(self) -> bool:
         best_parent = None
         min_cost = float('inf')
+        
+        # Connect goal can still be a linear scan, as it happens only once at the end.
         for node in self.nodes:
             if self._is_collision_free(node.position, self.goal_pos):
                 dist = calculate_distance_3d(self.coord_manager.world_to_local_meters(node.position), self.coord_manager.world_to_local_meters(self.goal_pos))

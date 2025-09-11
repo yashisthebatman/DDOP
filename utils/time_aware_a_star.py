@@ -9,6 +9,7 @@ from utils.coordinate_manager import CoordinateManager
 from environment import Environment
 
 GridPos = Tuple[int, int, int]
+MAX_TIME_STEPS = 150 # Safeguard against infinite searches in impossible scenarios
 
 class TimeAwareAStar:
     """Low-level planner for finding a single agent's path on a discrete grid,
@@ -18,18 +19,18 @@ class TimeAwareAStar:
         self.env = env
         self.coord_manager = coord_manager
         self.last_agents: List[Agent] = []
-        self.MOVES = [move for move in product([-1, 0, 1], repeat=3) if move != (0, 0, 0)]
+        
+        # PERFORMANCE OPTIMIZATION: Pre-calculate move costs to avoid repeated np.linalg.norm calls.
+        self.MOVES = [move for move in product([-1, 0, 1], repeat=3)]
+        self.MOVE_COSTS = {move: np.linalg.norm(np.array(move)) for move in self.MOVES}
         
     def find_path(self, agent: Agent, constraints: List[Constraint]) -> Optional[List[Tuple[GridPos, int]]]:
         self.last_agents.append(agent)
         start_node = (agent.start_pos, 0) # State is (position, time)
         
-        # Priority queue stores (f_score, state)
         open_set = [(0, start_node)]
         came_from = {}
         
-        # FIX: g_score must now store the *accumulated weighted cost*, not just time.
-        # This is the critical bug fix.
         g_score = {start_node: 0.0}
         
         constraint_set = {(c.position, c.timestamp) for c in constraints}
@@ -37,6 +38,9 @@ class TimeAwareAStar:
         while open_set:
             _, current_state = heapq.heappop(open_set)
             current_pos, current_time = current_state
+            
+            if current_time > MAX_TIME_STEPS:
+                continue
 
             if current_pos == agent.goal_pos:
                 return self._reconstruct_path(came_from, current_state)
@@ -59,13 +63,15 @@ class TimeAwareAStar:
                 world_pos = self.coord_manager.local_grid_to_world(neighbor_pos)
                 risk_cost = self.env.risk_map.get_risk(world_pos) if world_pos else 0
 
-                move_distance = np.linalg.norm(np.array(move))
-                edge_cost = (w_time * move_distance) + (w_risk * risk_cost * move_distance * 10)
+                # Use fast pre-calculated move cost
+                move_distance = self.MOVE_COSTS[move]
                 
-                # g_score is the accumulated weighted cost from the start
-                tentative_g_score = g_score[current_state] + edge_cost
+                wait_cost = 0.1 if move_distance == 0 else 0
+                edge_cost = (w_time * move_distance) + wait_cost + (w_risk * risk_cost * 10)
+                
+                tentative_g_score = g_score.get(current_state, float('inf')) + edge_cost
 
-                if neighbor_state not in g_score or tentative_g_score < g_score.get(neighbor_state, float('inf')):
+                if tentative_g_score < g_score.get(neighbor_state, float('inf')):
                     g_score[neighbor_state] = tentative_g_score
                     heuristic_cost = np.linalg.norm(np.array(agent.goal_pos) - np.array(neighbor_pos))
                     f_score = tentative_g_score + (w_time * heuristic_cost)

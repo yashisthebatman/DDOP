@@ -11,6 +11,11 @@ def test_smoothing_returns_more_points(smoother):
     """Smoothed path should be denser than the original grid path."""
     path = [(0,0,10), (10,0,10), (10,10,10)]
     env_mock = MagicMock()
+    # FIX: The test was failing because the mock environment was not configured.
+    # A call to env_mock.is_line_obstructed() returns a new MagicMock, which is
+    # truthy, causing the collision check to fail and the function to revert
+    # to the original path. We must explicitly set the return value to False.
+    env_mock.is_line_obstructed.return_value = False
     smoothed_path = smoother.smooth_path(path, env_mock)
     assert len(smoothed_path) > len(path)
     
