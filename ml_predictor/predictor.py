@@ -1,9 +1,8 @@
-# ml_predictor/predictor.py
-
 import numpy as np
 import os
 import joblib
 import logging
+import mlflow
 
 from config import (
     DRONE_SPEED_MPS, DRONE_VERTICAL_SPEED_MPS, DRONE_MASS_KG, DRONE_BASE_POWER_WATTS,
@@ -12,21 +11,14 @@ from config import (
 from utils.geometry import calculate_distance_3d, calculate_vector_angle_3d, calculate_wind_effect
 
 class PhysicsBasedPredictor:
-    """
-    Physics-based model for energy and time prediction.
-    This version includes a more realistic time model that differentiates
-    between fast horizontal travel and slower vertical travel.
-    """
-    
+    """Physics-based model for energy and time prediction."""
     def predict(self, p1, p2, payload_kg, wind_vector, p_prev=None):
         p1, p2 = np.array(p1), np.array(p2)
         flight_vector = p2 - p1
-        distance_3d = np.linalg.norm(flight_vector)
         
-        if distance_3d < 1e-6:
+        if np.linalg.norm(flight_vector) < 1e-6:
             return 0, 0
 
-        # --- Time Prediction ---
         horizontal_dist = np.linalg.norm([flight_vector[0], flight_vector[1]])
         vertical_dist = abs(flight_vector[2])
 
@@ -39,7 +31,6 @@ class PhysicsBasedPredictor:
         
         predicted_time = (horizontal_time * time_impact) + vertical_time
         
-        # --- Energy Prediction ---
         total_mass_kg = DRONE_MASS_KG + payload_kg
         altitude_change = p2[2] - p1[2]
         potential_energy_wh = 0
@@ -48,7 +39,6 @@ class PhysicsBasedPredictor:
             potential_energy_joules = (total_mass_kg * GRAVITY * altitude_change) / ASCENT_EFFICIENCY
             potential_energy_wh = potential_energy_joules / 3600
 
-        # Energy to overcome drag and maintain lift is proportional to time spent flying
         base_power_to_hover = DRONE_BASE_POWER_WATTS + (total_mass_kg * DRONE_ADDITIONAL_WATTS_PER_KG) 
         horizontal_power = base_power_to_hover * energy_impact_factor
         horizontal_energy_wh = (horizontal_power * predicted_time) / 3600
@@ -59,37 +49,32 @@ class PhysicsBasedPredictor:
             v2 = flight_vector
             if np.linalg.norm(v1) > 0 and np.linalg.norm(v2) > 0:
                 angle_rad = calculate_vector_angle_3d(v1, v2)
-                angle_deg = np.degrees(angle_rad)
-                turning_energy_wh = TURN_ENERGY_FACTOR * angle_deg
+                turning_energy_wh = TURN_ENERGY_FACTOR * np.degrees(angle_rad)
 
         total_energy = potential_energy_wh + horizontal_energy_wh + turning_energy_wh
         return predicted_time, total_energy
 
 class EnergyTimePredictor:
     """ML-powered predictor with a robust physics-based fallback."""
-    
-    def __init__(self, model_path="ml_predictor/drone_predictor_model.joblib"):
-        self.models = None # Default to None
+    def __init__(self, model_name="drone-energy-time-predictor", model_stage="Production"):
+        self.models = None
         self.fallback_predictor = PhysicsBasedPredictor()
         
         try:
-            if os.path.exists(model_path):
-                loaded_object = joblib.load(model_path)
-                
-                # --- FIX: Ensure self.models is ONLY set on successful validation ---
-                if isinstance(loaded_object, dict) and 'time_model' in loaded_object and 'energy_model' in loaded_object:
-                    self.models = loaded_object
-                    logging.info(f"✅ Successfully loaded and validated ML models from {model_path}")
-                else:
-                    logging.warning(f"⚠️ ML model file at {model_path} has an incorrect format.")
-                    logging.warning("   Expected a dictionary with keys 'time_model' and 'energy_model'.")
-                    logging.warning("   Using physics-based fallback for all predictions.")
-                    self.models = None # Explicitly set to None on failure
+            # Connect to MLflow (ensure MLFLOW_TRACKING_URI is set as an env var)
+            logging.info(f"Attempting to load ML model '{model_name}@{model_stage}' from registry...")
+            model_uri = f"models:/{model_name}/{model_stage}"
+            loaded_object = mlflow.sklearn.load_model(model_uri)
+            
+            if isinstance(loaded_object, dict) and 'time_model' in loaded_object and 'energy_model' in loaded_object:
+                self.models = loaded_object
+                logging.info(f"✅ Successfully loaded and validated ML models from {model_uri}")
             else:
-                logging.warning(f"⚠️ ML model not found at {model_path}. Using physics-based fallback.")
+                logging.warning(f"⚠️ ML model from {model_uri} has an incorrect format. Using fallback.")
+                self.models = None
         except Exception as e:
-            logging.error(f"❌ Error loading ML model from {model_path}: {e}. Using physics-based fallback.")
-            self.models = None # Explicitly set to None on failure
+            logging.error(f"❌ Error loading ML model from registry: {e}. Using physics-based fallback.")
+            self.models = None
 
     def predict(self, p1, p2, payload_kg, wind_vector, p_prev=None):
         if not self.models:
@@ -102,18 +87,10 @@ class EnergyTimePredictor:
             energy_pred = self.models['energy_model'].predict(features_2d)[0]
             return max(0, time_pred), max(0, energy_pred)
         except Exception as e:
-            logging.warning(f"An unexpected error occurred during ML prediction: {e}. Using physics-based fallback for this instance.")
+            logging.warning(f"Error during ML prediction: {e}. Using fallback.")
             return self.fallback_predictor.predict(p1, p2, payload_kg, wind_vector, p_prev)
-    
-    # ... rest of the class is unchanged ...
-    def predict_energy_time(self, p1, p2, payload_kg, wind_vector=None, p_prev=None):
-        """Wrapper method for compatibility."""
-        if wind_vector is None:
-            wind_vector = np.array([0, 0, 0])
-        return self.predict(p1, p2, payload_kg, wind_vector, p_prev)
 
     def _extract_features(self, p1, p2, payload_kg, wind_vector, p_prev=None):
-        """Extract features for ML prediction."""
         distance_3d = calculate_distance_3d(p1, p2)
         altitude_change = p2[2] - p1[2]
         horizontal_distance = np.linalg.norm([p2[0] - p1[0], p2[1] - p1[1]])
@@ -122,18 +99,14 @@ class EnergyTimePredictor:
         flight_vector = np.array(p2) - np.array(p1)
         
         wind_alignment = 0.0
-        flight_vector_norm = np.linalg.norm(flight_vector)
-        wind_vector_norm = np.linalg.norm(wind_vector)
-        if flight_vector_norm > 1e-6 and wind_vector_norm > 1e-6:
-            wind_alignment = np.dot(wind_vector, flight_vector) / (wind_vector_norm * flight_vector_norm)
+        if np.linalg.norm(flight_vector) > 1e-6 and np.linalg.norm(wind_vector) > 1e-6:
+            wind_alignment = np.dot(wind_vector, flight_vector) / (np.linalg.norm(wind_vector) * np.linalg.norm(flight_vector))
         
         turning_angle = 0
         if p_prev is not None:
             v1 = np.array(p1) - np.array(p_prev)
-            v2 = flight_vector
-            if np.linalg.norm(v1) > 0 and np.linalg.norm(v2) > 0:
-                angle_rad = calculate_vector_angle_3d(v1, v2)
-                turning_angle = np.degrees(angle_rad)
+            if np.linalg.norm(v1) > 0 and np.linalg.norm(flight_vector) > 0:
+                turning_angle = np.degrees(calculate_vector_angle_3d(v1, flight_vector))
         
         return [
             distance_3d, altitude_change, horizontal_distance, payload_kg,

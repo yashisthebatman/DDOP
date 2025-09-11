@@ -21,6 +21,21 @@ class Building:
     size_xy: Tuple[float, float]
     height: float
 
+class RiskMap:
+    """Represents a 2D grid of risk values for pathfinding cost functions."""
+    def __init__(self):
+        # Placeholder for a more sophisticated risk model (e.g., from population density)
+        self.risk_grid = np.random.rand(10, 10) * 0.1 # Low base risk
+        # Add a high-risk area for testing
+        self.risk_grid[3:6, 3:6] = 0.9
+
+    def get_risk(self, world_pos: Tuple[float, float, float]) -> float:
+        # Simple mapping from world coordinates to grid indices
+        # This should be replaced with a proper geo-referenced lookup
+        lon_idx = int(np.interp(world_pos[0], [AREA_BOUNDS[0], AREA_BOUNDS[2]], [0, 9]))
+        lat_idx = int(np.interp(world_pos[1], [AREA_BOUNDS[1], AREA_BOUNDS[3]], [0, 9]))
+        return self.risk_grid[np.clip(lat_idx, 0, 9), np.clip(lon_idx, 0, 9)]
+
 class WeatherSystem:
     def __init__(self, seed=None, scale=150.0, max_speed=15.0):
         if seed is None:
@@ -34,17 +49,31 @@ class WeatherSystem:
     def update_weather(self, time_step=0.01):
         self.time += time_step
 
-    def get_wind_at_location(self, lon, lat):
+    def get_wind_at_location(self, lon: float, lat: float, alt: float) -> np.ndarray:
+        """
+        Calculates wind vector, now with altitude dependency.
+        Wind speed generally increases with altitude.
+        """
         norm_lon, norm_lat = lon / self.scale, lat / self.scale
         wind_x_noise = self.noise_gen_x.noise3(norm_lon, norm_lat, self.time)
         wind_y_noise = self.noise_gen_y.noise3(norm_lon, norm_lat, self.time)
-        wind_x, wind_y = wind_x_noise * self.max_speed, wind_y_noise * self.max_speed
+        
+        # Altitude factor: wind is calmer near the ground, stronger higher up.
+        # Starts at ~70% strength at MIN_ALTITUDE, up to 120% at MAX_ALTITUDE.
+        altitude_factor = np.interp(alt, [MIN_ALTITUDE, MAX_ALTITUDE], [0.7, 1.2])
+        
+        effective_max_speed = self.max_speed * altitude_factor
+        wind_x = wind_x_noise * effective_max_speed
+        wind_y = wind_y_noise * effective_max_speed
+        
         return np.array([wind_x, wind_y, 0])
+
 
 class Environment:
     def __init__(self, weather_system: WeatherSystem):
         self.static_nfzs = NO_FLY_ZONES
         self.weather: WeatherSystem = weather_system
+        self.risk_map: RiskMap = RiskMap()
         self.dynamic_nfzs: List[Dict] = []
         self.event_triggered = False
         self.was_nfz_just_added = False
@@ -116,8 +145,6 @@ class Environment:
         
         candidates = list(self.obstacle_index.intersection((x, y, z, x, y, z)))
         
-        # The R-tree only provides potential candidates.
-        # This loop confirms if the point is truly inside one of their bounding boxes.
         for obstacle_id in candidates:
             bounds = self.obstacles[obstacle_id]
             if (bounds[0] <= x <= bounds[3] and

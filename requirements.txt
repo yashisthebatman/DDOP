@@ -1,10 +1,7 @@
-# ==============================================================================
-# File: requirements.txt
-# ==============================================================================
-
 # Core scientific and data handling libraries
 numpy
 pandas
+scipy
 
 # Pathfinding and graph theory
 networkx
@@ -16,6 +13,7 @@ opensimplex   # For Perlin/Simplex noise in weather simulation
 # Machine Learning model handling
 scikit-learn
 joblib
+mlflow        # For MLOps and model registry
 
 # Web application framework
 streamlit
