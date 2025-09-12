@@ -25,7 +25,7 @@ def get_initial_state():
             'home_hub': home_hub_name, # Assign a home base
             'battery': DRONE_BATTERY_WH,
             'max_payload_kg': DRONE_MAX_PAYLOAD_KG,
-            'status': 'IDLE',  # IDLE, PLANNING, EN ROUTE, RECHARGING, EMERGENCY_RETURN
+            'status': 'IDLE',  # IDLE, PLANNING, EN ROUTE, RECHARGING, EMERGENCY_RETURN, PERFORMING_DELIVERY, AVOIDING
             'mission_id': None,
             'available_at': 0.0
         }

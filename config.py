@@ -1,3 +1,4 @@
+# FILE: config.py
 """Central configuration file for the Q-DOP project."""
 import warnings
 
@@ -66,3 +67,10 @@ DRONE_RECHARGE_TIME_S = 30.0
 
 # --- Pathfinding Parameters ---
 MAX_PATH_LENGTH = 5000
+
+# --- Delivery Maneuver ---
+DELIVERY_MANEUVER_TIME_SEC = 90 # 1.5 minutes for landing/lowering package
+
+# --- Deconfliction Parameters ---
+SAFETY_BUBBLE_RADIUS_METERS = 30.0 # Drones must maintain this separation
+AVOIDANCE_MANEUVER_ALTITUDE_SEP = 15.0 # How much to climb/descend

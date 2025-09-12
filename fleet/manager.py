@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 from fleet.cbs_components import Agent
 from planners.cbsh_planner import CBSHPlanner
 from ml_predictor.predictor import EnergyTimePredictor
-from config import RTH_BATTERY_THRESHOLD_FACTOR
+from config import RTH_BATTERY_THRESHOLD_FACTOR, DELIVERY_MANEUVER_TIME_SEC
 from utils.geometry import calculate_distance_3d
 
 class Mission:
@@ -24,7 +24,9 @@ class Mission:
         self.path, self.path_world_coords = [], []
         self.total_planned_energy, self.total_planned_time = 0.0, 0.0
         self.state = "PENDING"
-        self.current_leg_index = 0
+        self.current_stop_index = 0
+        self.mission_time_elapsed = 0.0
+        self.flight_time_elapsed = 0.0
 
     def to_dict(self):
         """Converts mission object to a dictionary for JSON serialization."""
@@ -43,16 +45,12 @@ class Mission:
             'total_planned_energy': self.total_planned_energy,
             'total_planned_time': self.total_planned_time,
             'start_time': 0, 
-            'start_battery': 0
+            'start_battery': 0,
+            'current_stop_index': self.current_stop_index,
+            'mission_time_elapsed': self.mission_time_elapsed,
+            'flight_time_elapsed': self.flight_time_elapsed,
+            'total_maneuver_time': 0
         }
-
-    def is_complete(self):
-        return self.current_leg_index >= len(self.destinations)
-
-    def advance_leg(self):
-        if not self.is_complete():
-            self.current_leg_index += 1
-            self.state = "COMPLETED" if self.is_complete() else "PENDING"
 
 class FleetManager:
     def __init__(self, cbs_planner: CBSHPlanner, predictor: EnergyTimePredictor):
@@ -88,7 +86,6 @@ class FleetManager:
         logging.info(f"FleetManager initiating CBSH planning for {len(active_agents)} agents.")
         solution = self.cbs_planner.plan_fleet(active_agents)
 
-        # --- Prepare update dictionaries instead of direct modification ---
         drone_updates = {}
         mission_updates = {}
         successful_mission_ids = []
@@ -121,21 +118,24 @@ class FleetManager:
                     _, energy_pred = self.predictor.predict(p1, p2, mission['payload_kg'], wind, world_path[i-1] if i>0 else None)
                     total_energy += energy_pred
                 
+                num_stops = len(mission.get('stops', []))
+                total_maneuver_time = num_stops * DELIVERY_MANEUVER_TIME_SEC
+                flight_time = path[-1][1]
+                
                 mission_updates[mission_id] = {
                     'path_world_coords': smoothed_path,
                     'total_planned_energy': total_energy,
-                    'total_planned_time': path[-1][1],
+                    'total_planned_time': flight_time + total_maneuver_time,
+                    'total_maneuver_time': total_maneuver_time,
                     'start_time': state['simulation_time'],
                     'start_battery': drone['battery']
                 }
                 drone_updates[agent_id] = {'status': 'EN ROUTE'}
                 successful_mission_ids.append(mission_id)
             else:
-                 # Handle cases where a specific agent's plan resulted in an empty path
                 drone_updates[agent_id] = {'status': 'IDLE', 'mission_id': None}
                 mission_failures.append(mission_id)
 
-        # Handle agents that were sent for planning but got no solution
         unsolved_agents = [agent_id for agent_id in drones_in_planning if agent_id not in solved_agents]
         for agent_id in unsolved_agents:
             drone_updates[agent_id] = {'status': 'IDLE', 'mission_id': None}
