@@ -16,6 +16,7 @@ class Mission:
         self.payload_kg = payload_kg
         self.order_ids = order_ids
         self.optimization_weights = optimization_weights
+        self.stops = [] # Store full order details for contingency planning
         
         self.path, self.path_world_coords = [], []
         self.total_planned_energy, self.total_planned_time = 0.0, 0.0
@@ -28,6 +29,7 @@ class Mission:
             'mission_id': self.mission_id,
             'drone_id': self.drone_id,
             'order_ids': self.order_ids,
+            'stops': self.stops,
             'start_pos': self.start_pos,
             'destinations': self.destinations,
             'payload_kg': self.payload_kg,

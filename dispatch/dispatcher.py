@@ -75,6 +75,8 @@ class Dispatcher:
                 payload_kg=tour['payload'],
                 order_ids=order_ids
             )
+            # Store the full order details for contingency planning
+            mission_obj.stops = tour['stops']
             
             state['active_missions'][mission_id] = mission_obj.to_dict()
 

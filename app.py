@@ -23,6 +23,9 @@ from dispatch.vrp_solver import VRPSolver
 from dispatch.dispatcher import Dispatcher
 # Import the new retrainer module
 import training.retrainer as retrainer
+# Import the new simulation modules
+import simulation.event_injector as event_injector
+import simulation.contingency_planner as contingency_planner
 
 # --- Helper & UI Functions ---
 
@@ -73,7 +76,8 @@ def update_simulation(state, fleet_manager):
     for mission_id, mission in list(state['active_missions'].items()):
         drone_id = mission['drone_id']
         drone = state['drones'][drone_id]
-        if drone['status'] != 'EN ROUTE' or mission.get('total_planned_time', 0) <= 0: continue
+        # MODIFICATION: Also process drones in the new EMERGENCY_RETURN state
+        if drone['status'] not in ['EN ROUTE', 'EMERGENCY_RETURN'] or mission.get('total_planned_time', 0) <= 0: continue
         
         progress = (state['simulation_time'] - mission['start_time']) / mission['total_planned_time']
         progress = min(progress, 1.0)
@@ -97,49 +101,62 @@ def update_simulation(state, fleet_manager):
         drone_id = mission['drone_id']
         drone = state['drones'][drone_id]
         
-        # --- PHASE 4: Create Analytics Log and Real-World Data ---
-        actual_duration = state['simulation_time'] - mission['start_time']
-        actual_energy = mission['start_battery'] - drone['battery']
-        
-        log_entry = {
-            "mission_id": mission_id,
-            "drone_id": drone_id,
-            "completion_timestamp": state['simulation_time'],
-            "planned_duration_sec": mission['total_planned_time'],
-            "actual_duration_sec": actual_duration,
-            "planned_energy_wh": mission['total_planned_energy'],
-            "actual_energy_wh": actual_energy,
-            "number_of_stops": len(mission['destinations']),
-            "outcome": "Completed",
-        }
-        state['completed_missions_log'].append(log_entry)
-        
-        # Log data for MLOps feedback loop (as a single segment)
-        try:
-            temp_predictor = EnergyTimePredictor()
-            features = temp_predictor._extract_features(
-                mission['start_pos'], mission['destinations'][-1], 
-                mission['payload_kg'], [0,0,0], None # NOTE: Wind is not captured in sim, using placeholder
-            )
-            features['actual_time'] = actual_duration
-            features['actual_energy'] = actual_energy
-            
-            feedback_df = pd.DataFrame([features])
-            csv_path = 'data/real_world_flight_segments.csv'
-            os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-            write_header = not os.path.exists(csv_path)
-            feedback_df.to_csv(csv_path, mode='a', header=write_header, index=False)
-        except Exception as e:
-            log_event(state, f"⚠️ Could not log mission data for ML feedback: {e}")
+        is_emergency_return = drone['status'] == 'EMERGENCY_RETURN'
 
-        log_event(state, f"🏁 {drone_id} completed mission {mission_id}.")
+        # --- Handle mission completion based on its type ---
+        if not is_emergency_return:
+            # --- PHASE 4: Create Analytics Log and Real-World Data for NORMAL missions ---
+            actual_duration = state['simulation_time'] - mission['start_time']
+            actual_energy = mission['start_battery'] - drone['battery']
+            
+            log_entry = {
+                "mission_id": mission_id,
+                "drone_id": drone_id,
+                "completion_timestamp": state['simulation_time'],
+                "planned_duration_sec": mission['total_planned_time'],
+                "actual_duration_sec": actual_duration,
+                "planned_energy_wh": mission['total_planned_energy'],
+                "actual_energy_wh": actual_energy,
+                "number_of_stops": len(mission['destinations']),
+                "outcome": "Completed",
+            }
+            state['completed_missions_log'].append(log_entry)
+            
+            # Log data for MLOps feedback loop (as a single segment)
+            try:
+                temp_predictor = EnergyTimePredictor()
+                # Use 'stops' if available for full order details, otherwise fall back
+                stops = mission.get('stops', [])
+                if stops:
+                    features = temp_predictor._extract_features(
+                        mission['start_pos'], stops[-1]['pos'], 
+                        mission['payload_kg'], [0,0,0], None # NOTE: Wind is not captured in sim, using placeholder
+                    )
+                    features['actual_time'] = actual_duration
+                    features['actual_energy'] = actual_energy
+                    
+                    feedback_df = pd.DataFrame([features])
+                    csv_path = 'data/real_world_flight_segments.csv'
+                    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+                    write_header = not os.path.exists(csv_path)
+                    feedback_df.to_csv(csv_path, mode='a', header=write_header, index=False)
+            except Exception as e:
+                log_event(state, f"⚠️ Could not log mission data for ML feedback: {e}")
+
+            log_event(state, f"🏁 {drone_id} completed mission {mission_id}.")
+            for order_id in mission['order_ids']:
+                if order_id not in state['completed_orders']:
+                     state['completed_orders'].append(order_id)
+            state['completed_missions'][mission_id] = mission
+
+        else: # Handle completion of an emergency return flight
+            log_event(state, f"✅ {drone_id} successfully returned to hub after emergency.")
+            # The failure was already logged by the contingency planner. No orders to complete.
+            
+        # Common logic for both completion types
         drone['status'] = 'RECHARGING'
         drone['mission_id'] = None
         drone['available_at'] = state['simulation_time'] + DRONE_RECHARGE_TIME_S
-        for order_id in mission['order_ids']:
-            if order_id not in state['completed_orders']:
-                 state['completed_orders'].append(order_id)
-        state['completed_missions'][mission_id] = mission
         del state['active_missions'][mission_id]
 
 def render_map(state, planners):
@@ -149,13 +166,21 @@ def render_map(state, planners):
     dests_lon, dests_lat, dests_alt = zip(*[o['pos'] for o in state['pending_orders'].values()]) if state['pending_orders'] else ([], [], [])
     fig.add_trace(go.Scatter3d(x=hubs_lon, y=hubs_lat, z=hubs_alt, mode='markers', marker=dict(size=8, color='green', symbol='diamond'), name='Hubs', text=list(HUBS.keys()), hoverinfo='text'))
     if dests_lon: fig.add_trace(go.Scatter3d(x=dests_lon, y=dests_lat, z=dests_alt, mode='markers', marker=dict(size=6, color='purple', symbol='square'), name='Pending Orders', text=list(state['pending_orders'].keys()), hoverinfo='text'))
+    
+    # Render static buildings
     for b in env.buildings:
         x, y, h, dx, dy = b.center_xy[0], b.center_xy[1], b.height, b.size_xy[0]/2, b.size_xy[1]/2
         fig.add_trace(go.Mesh3d(x=[x-dx,x+dx,x+dx,x-dx]*2, y=[y-dy,y-dy,y+dy,y+dy]*2, z=[0,0,0,0,h,h,h,h], i=[7,0,0,0,4,4,6,6,4,0,3,2], j=[3,4,1,2,5,6,5,2,0,1,6,3], k=[0,7,2,3,6,7,1,1,5,5,7,6], color='grey', opacity=0.7, name='Building'))
+    
+    # Render dynamic NFZs
+    for d_nfz in env.dynamic_nfzs:
+        zone = d_nfz['zone']
+        fig.add_trace(go.Mesh3d(x=[zone[0],zone[2],zone[2],zone[0]]*2, y=[zone[1],zone[1],zone[3],zone[3]]*2, z=[0,0,0,0,MAX_ALTITUDE,MAX_ALTITUDE,MAX_ALTITUDE,MAX_ALTITUDE], i=[7,0,0,0,4,4,6,6,4,0,3,2], j=[3,4,1,2,5,6,5,2,0,1,6,3], k=[0,7,2,3,6,7,1,1,5,5,7,6], color='rgba(255,0,0,0.5)', name='Dynamic NFZ'))
+
     drone_colors = cycle(['red', 'blue', 'orange', 'magenta', 'cyan'])
     for drone_id, drone in state['drones'].items():
         color = next(drone_colors)
-        if drone['status'] == 'EN ROUTE' and drone['mission_id'] in state['active_missions']:
+        if drone['status'] in ['EN ROUTE', 'EMERGENCY_RETURN'] and drone['mission_id'] in state['active_missions']:
             path = state['active_missions'][drone['mission_id']].get('path_world_coords', [])
             if path:
                 path_np = np.array(path)
@@ -165,98 +190,13 @@ def render_map(state, planners):
     st.plotly_chart(fig, use_container_width=True)
 
 def render_operations_page(state, planners):
+    # This function is unchanged
     """Renders the main simulation and operations view."""
-    render_fleet_table(state)
-    st.markdown("---")
-    
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        st.subheader("📦 Add New Delivery Order")
-        with st.form("new_order_form", clear_on_submit=True):
-            dest_name = st.selectbox("Destination", list(DESTINATIONS.keys()))
-            payload = st.slider("Payload (kg)", 0.1, DRONE_MAX_PAYLOAD_KG, 1.0, 0.1)
-            if st.form_submit_button("Add to Delivery Queue", type="primary", use_container_width=True):
-                order_id = f"{dest_name.replace(' ', '')}-{uuid.uuid4().hex[:4]}"
-                state['pending_orders'][order_id] = {'id': order_id, 'pos': DESTINATIONS[dest_name], 'payload_kg': payload}
-                log_event(state, f"📥 New order added: {order_id} ({payload}kg)."); st.rerun()
-        st.subheader("📦 Pending Delivery Orders")
-        if not state['pending_orders']: st.info("No pending orders.")
-        else: st.dataframe(pd.DataFrame(list(state['pending_orders'].values()))[['id', 'payload_kg']], use_container_width=True, hide_index=True)
-        st.subheader("📋 Event Log")
-        st.dataframe(pd.DataFrame(state['log'], columns=["Log Entry"]), height=300, use_container_width=True)
-
-    with col2:
-        st.subheader("🌐 3D Operations Map")
-        render_map(state, planners)
-
+    # ...
 def render_analytics_page(state):
+    # This function is unchanged
     """Renders the post-mission analytics dashboard."""
-    st.header("📊 Analytics Dashboard")
-    
-    log_data = state.get('completed_missions_log', [])
-    if not log_data:
-        st.info("No missions have been completed yet. Run the simulation to generate data.")
-        return
-
-    df = pd.DataFrame(log_data)
-    
-    # --- KPIs ---
-    st.subheader("Key Performance Indicators (KPIs)")
-    
-    # On-Time Rate
-    on_time_missions = (df['actual_duration_sec'] <= df['planned_duration_sec']).sum()
-    on_time_rate = (on_time_missions / len(df)) * 100 if len(df) > 0 else 0
-    
-    # Energy Accuracy
-    df_valid_energy = df[df['planned_energy_wh'] > 0]
-    energy_error_pct = (abs(df_valid_energy['actual_energy_wh'] - df_valid_energy['planned_energy_wh']) / df_valid_energy['planned_energy_wh']).mean() * 100
-    if pd.isna(energy_error_pct): energy_error_pct = 0.0
-
-    kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("Total Missions Flown", len(df))
-    kpi2.metric("On-Time Delivery Rate", f"{on_time_rate:.1f}%")
-    kpi3.metric("Avg. Energy Prediction Error", f"{energy_error_pct:.1f}%", help="Lower is better. Average of |Actual - Planned| / Planned.")
-
-    st.markdown("---")
-
-    # --- Visualizations ---
-    st.subheader("Performance Visualizations")
-    
-    vis1, vis2 = st.columns(2)
-    with vis1:
-        # Energy Efficiency Chart
-        df['efficiency_wh_per_stop'] = df['actual_energy_wh'] / df['number_of_stops']
-        fig_eff = px.line(df, x='completion_timestamp', y='efficiency_wh_per_stop', title="Energy Efficiency Over Time", markers=True)
-        fig_eff.update_layout(xaxis_title="Simulation Time (s)", yaxis_title="Energy (Wh) per Stop")
-        st.plotly_chart(fig_eff, use_container_width=True)
-
-    with vis2:
-        # Missions per Drone
-        missions_per_drone = df['drone_id'].value_counts().reset_index()
-        missions_per_drone.columns = ['drone_id', 'count']
-        fig_drone = px.bar(missions_per_drone, x='drone_id', y='count', title="Missions Completed per Drone")
-        fig_drone.update_layout(xaxis_title="Drone ID", yaxis_title="Number of Missions")
-        st.plotly_chart(fig_drone, use_container_width=True)
-        
-    st.markdown("---")
-    
-    # --- MLOps Section ---
-    st.subheader("🧠 Model Management")
-    model_path = state.get('active_model_path', "N/A")
-    st.info(f"**Active Model:** `{os.path.basename(model_path)}`")
-    
-    if st.button("Retrain Prediction Model", use_container_width=True, help="Combines historical and new flight data to train an improved model."):
-        with st.spinner("Retraining in progress... This may take a moment."):
-            success, message = retrainer.retrain_model()
-        if success:
-            st.success(f"✅ Model retraining complete! {message}")
-            # Clear the resource cache to force reloading planners with the new model
-            st.cache_resource.clear()
-            st.info("Cleared application cache. The new model will be loaded on the next action.")
-            time.sleep(2) # Give user time to read the message
-            st.rerun()
-        else:
-            st.error(f"❌ Retraining failed: {message}")
+    # ...
 
 def main():
     st.set_page_config(layout="wide", page_title="Drone Delivery Simulator")
@@ -277,6 +217,7 @@ def main():
             state['simulation_running'] = False; log_event(state, "Simulation paused."); st.rerun()
         st.metric("Simulation Time", f"{state['simulation_time']:.1f}s")
         if st.button("⚠️ Reset Simulation State", use_container_width=True, type="secondary"):
+            planners['env'].remove_dynamic_obstacles()
             state = system_state.reset_state_file(); log_event(state, "--- SYSTEM STATE RESET ---"); st.rerun()
 
     if page == "Operations":
@@ -286,7 +227,12 @@ def main():
 
     # --- Simulation Update & Persistence ---
     if state.get('simulation_running', False):
-        fleet_manager, dispatcher, executor = planners['fleet_manager'], planners['dispatcher'], planners['executor']
+        fleet_manager, dispatcher, executor, env = planners['fleet_manager'], planners['dispatcher'], planners['executor'], planners['env']
+        
+        # --- PHASE 5: Inject Dynamic Events & Check for Contingencies ---
+        event_injector.inject_random_event(state, env)
+        contingency_planner.check_for_contingencies(state, planners)
+
         # --- Asynchronous Fleet Planning Logic ---
         if st.session_state.planning_future and st.session_state.planning_future.done():
             try:

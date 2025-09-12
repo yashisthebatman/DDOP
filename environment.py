@@ -109,6 +109,17 @@ class Environment:
             if d_nfz['id'] in self.obstacles: del self.obstacles[d_nfz['id']]
         self.dynamic_nfzs.clear()
         self.event_triggered = self.was_nfz_just_added = False
+    
+    def add_dynamic_nfz(self, zone_world: List[float]):
+        """Adds a new dynamic No-Fly Zone to the environment."""
+        bl_world, tr_world = (zone_world[0], zone_world[1], MIN_ALTITUDE), (zone_world[2], zone_world[3], MAX_ALTITUDE)
+        min_mx, min_my, _ = self.coord_manager.world_to_meters(bl_world)
+        max_mx, max_my, _ = self.coord_manager.world_to_meters(tr_world)
+        bounds_m = (min_mx, min_my, MIN_ALTITUDE, max_mx, max_my, MAX_ALTITUDE)
+        obs_id = self._add_obstacle_to_index(bounds_m)
+        self.dynamic_nfzs.append({'zone': zone_world, 'bounds': bounds_m, 'id': obs_id})
+        self.event_triggered = self.was_nfz_just_added = True
+        logging.info(f"Added new dynamic NFZ with ID {obs_id} at bounds {zone_world}")
 
     def is_point_obstructed(self, point_world: Tuple[float, float, float]) -> bool:
         lon, lat, alt = point_world
@@ -132,15 +143,8 @@ class Environment:
     
     def update_environment(self, simulation_time: float, time_step: float):
         self.weather.update_weather(time_step)
-        if simulation_time > 15 and not self.event_triggered:
-            zone_world = [-74.005, 40.72, -73.995, 40.73]
-            bl_world, tr_world = (zone_world[0], zone_world[1], MIN_ALTITUDE), (zone_world[2], zone_world[3], MAX_ALTITUDE)
-            min_mx, min_my, _ = self.coord_manager.world_to_meters(bl_world)
-            max_mx, max_my, _ = self.coord_manager.world_to_meters(tr_world)
-            bounds_m = (min_mx, min_my, MIN_ALTITUDE, max_mx, max_my, MAX_ALTITUDE)
-            obs_id = self._add_obstacle_to_index(bounds_m)
-            self.dynamic_nfzs.append({'zone': zone_world, 'bounds': bounds_m, 'id': obs_id})
-            self.event_triggered = self.was_nfz_just_added = True
+        # The logic for adding a dynamic NFZ is now handled externally
+        # by the event injector to allow for random, unpredictable events.
         
     def create_planning_grid(self) -> np.ndarray:
         w, h, d = self.coord_manager.grid_width, self.coord_manager.grid_height, self.coord_manager.grid_depth
