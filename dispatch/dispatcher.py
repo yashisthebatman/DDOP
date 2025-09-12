@@ -5,10 +5,10 @@ from typing import Dict, Any
 
 from dispatch.vrp_solver import VRPSolver
 from fleet.manager import Mission
-from config import DRONE_BATTERY_WH
+from config import DRONE_BATTERY_WH, HUBS
 
 # --- Dispatcher Trigger Conditions ---
-MIN_ORDERS_FOR_BATCH = 3
+MIN_ORDERS_FOR_BATCH = 5
 
 class Dispatcher:
     """Decides when to batch orders and dispatch drones."""
@@ -36,9 +36,10 @@ class Dispatcher:
         """
         pending_orders = list(state['pending_orders'].values())
         
-        # --- Trigger Condition Check ---
-        if len(pending_orders) < MIN_ORDERS_FOR_BATCH:
-            return False # Not enough orders to warrant a batch computation
+        # --- Trigger on batch size OR high priority order ---
+        any_high_priority = any(o.get('high_priority', False) for o in pending_orders)
+        if len(pending_orders) < MIN_ORDERS_FOR_BATCH and not any_high_priority:
+            return False
         
         eligible_drones = self._get_eligible_drones(state)
         if not eligible_drones:
@@ -63,7 +64,11 @@ class Dispatcher:
                 continue
 
             order_ids = [stop['id'] for stop in tour['stops']]
+            
+            # Destination now includes final hub
             destinations = [stop['pos'] for stop in tour['stops']]
+            end_hub_pos = HUBS[tour['end_hub_id']]
+            destinations.append(end_hub_pos)
             
             mission_id = f"M-{uuid.uuid4().hex[:6]}"
             
@@ -75,9 +80,11 @@ class Dispatcher:
                 payload_kg=tour['payload'],
                 order_ids=order_ids
             )
-            # Store the full order details for contingency planning
+            # Store the full order details and hub info
             mission_obj.stops = tour['stops']
-            
+            mission_obj.start_hub = tour['start_hub_id']
+            mission_obj.end_hub = tour['end_hub_id']
+
             state['active_missions'][mission_id] = mission_obj.to_dict()
 
             # Update drone and order states

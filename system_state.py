@@ -15,25 +15,28 @@ def get_initial_state():
     Defines the default structure and initial values for the system state.
     This is used to create the database file on the first run.
     """
-    drones = {
-        f"Drone {i+1}": {
-            'id': f"Drone {i+1}", # Add id for convenience
-            'pos': HUBS[list(HUBS.keys())[i % len(HUBS)]],
-            'home_hub': list(HUBS.keys())[i % len(HUBS)],
+    drones = {}
+    for i in range(15):
+        drone_id = f"Drone {i+1}"
+        home_hub_name = list(HUBS.keys())[i % len(HUBS)]
+        drones[drone_id] = {
+            'id': drone_id,
+            'pos': HUBS[home_hub_name],
+            'home_hub': home_hub_name, # Assign a home base
             'battery': DRONE_BATTERY_WH,
             'max_payload_kg': DRONE_MAX_PAYLOAD_KG,
-            'status': 'IDLE',  # IDLE, PLANNING, EN ROUTE, RECHARGING
+            'status': 'IDLE',  # IDLE, PLANNING, EN ROUTE, RECHARGING, EMERGENCY_RETURN
             'mission_id': None,
-            'available_at': 0.0  # Simulation time when the drone becomes available after charging
-        } for i in range(3)
-    }
+            'available_at': 0.0
+        }
 
     pending_orders = {
         name: {
             'pos': pos,
             # Assign a random, realistic payload to each predefined destination
             'payload_kg': round(np.random.uniform(0.5, DRONE_MAX_PAYLOAD_KG - 0.5), 2),
-            'id': name
+            'id': name,
+            'high_priority': False
         } for name, pos in DESTINATIONS.items()
     }
 

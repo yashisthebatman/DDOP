@@ -26,6 +26,7 @@ import training.retrainer as retrainer
 # Import the new simulation modules
 import simulation.event_injector as event_injector
 import simulation.contingency_planner as contingency_planner
+from simulation.contingency_planner import _trigger_emergency_return
 
 # --- Helper & UI Functions ---
 
@@ -74,6 +75,10 @@ def update_simulation(state, fleet_manager):
 
     missions_to_complete = []
     for mission_id, mission in list(state['active_missions'].items()):
+        # Skip paused missions
+        if mission.get('is_paused', False):
+            continue
+            
         drone_id = mission['drone_id']
         drone = state['drones'][drone_id]
         # MODIFICATION: Also process drones in the new EMERGENCY_RETURN state
@@ -154,6 +159,13 @@ def update_simulation(state, fleet_manager):
             # The failure was already logged by the contingency planner. No orders to complete.
             
         # Common logic for both completion types
+        # Drone relocation logic for multi-hub missions
+        end_hub_id = mission.get('end_hub')
+        if end_hub_id and end_hub_id in HUBS:
+            drone['home_hub'] = end_hub_id
+            drone['pos'] = HUBS[end_hub_id]
+            log_event(state, f"🚚 {drone_id} has relocated to new home base: {end_hub_id}.")
+        
         drone['status'] = 'RECHARGING'
         drone['mission_id'] = None
         drone['available_at'] = state['simulation_time'] + DRONE_RECHARGE_TIME_S
@@ -190,13 +202,98 @@ def render_map(state, planners):
     st.plotly_chart(fig, use_container_width=True)
 
 def render_operations_page(state, planners):
-    # This function is unchanged
     """Renders the main simulation and operations view."""
-    # ...
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.subheader("Live Fleet Map")
+        render_map(state, planners)
+    with c2:
+        st.subheader("System Log")
+        log_html = "".join([f"<div style='font-size: 13px; font-family: monospace;'>{msg}</div>" for msg in state['log'][:20]])
+        st.components.v1.html(f"<div style='height: 400px; overflow-y: scroll; border: 1px solid #444; padding: 5px;'>{log_html}</div>", height=410)
+
+    st.markdown("---")
+    st.subheader("Fleet & Mission Control")
+    
+    # Operator Overrides UI
+    status_cols = st.columns(4)
+    status_cols[0].metric("Drones Idle", len([d for d in state['drones'].values() if d['status'] == 'IDLE']))
+    status_cols[1].metric("Drones En Route", len([d for d in state['drones'].values() if d['status'] in ['EN ROUTE', 'EMERGENCY_RETURN']]))
+    status_cols[2].metric("Pending Orders", len(state['pending_orders']))
+    status_cols[3].metric("Completed Orders", len(state['completed_orders']))
+    
+    for drone_id, drone in sorted(state['drones'].items()):
+        with st.expander(f"**{drone_id}** ({drone['status']}) - Battery: {drone['battery']:.1f}Wh - Location: {drone['home_hub']}"):
+            if drone['status'] in ['EN ROUTE', 'EMERGENCY_RETURN']:
+                mission = state['active_missions'].get(drone['mission_id'])
+                if mission:
+                    st.write(f"**Mission:** {mission['mission_id']}")
+                    st.write(f"**Orders:** {', '.join(mission['order_ids'])}")
+                    st.progress(min(1.0, (state['simulation_time'] - mission['start_time']) / mission.get('total_planned_time', 1)))
+                    
+                    b_cols = st.columns(3)
+                    is_paused = mission.get('is_paused', False)
+                    if is_paused:
+                        if b_cols[0].button("▶️ Resume", key=f"resume_{drone_id}", use_container_width=True):
+                            state['active_missions'][drone['mission_id']]['is_paused'] = False
+                            log_event(state, f"OPERATOR: Resumed mission for {drone_id}.")
+                            st.rerun()
+                    else:
+                        if b_cols[0].button("⏸️ Pause", key=f"pause_{drone_id}", use_container_width=True):
+                            state['active_missions'][drone['mission_id']]['is_paused'] = True
+                            log_event(state, f"OPERATOR: Paused mission for {drone_id}.")
+                            st.rerun()
+                    
+                    if b_cols[1].button("❌ Cancel Mission", key=f"cancel_{drone_id}", type="primary", use_container_width=True):
+                        _trigger_emergency_return(state, drone_id, "Manual Operator Override", planners)
+                        log_event(state, f"OPERATOR: Manually cancelled mission for {drone_id}.")
+                        st.rerun()
+            else:
+                st.write("Awaiting task.")
+
+    st.markdown("---")
+    with st.form("add_order_form"):
+        st.subheader("Add New Order")
+        c1, c2, c3, c4 = st.columns([2,1,1,1])
+        dest_name = c1.selectbox("Destination", DESTINATIONS.keys())
+        payload = c2.number_input("Payload (kg)", min_value=0.1, max_value=DRONE_MAX_PAYLOAD_KG, value=1.0, step=0.5)
+        is_high_priority = c3.checkbox("High Priority", help="High priority orders trigger dispatch immediately.")
+        submitted = c4.form_submit_button("Add Order")
+        if submitted:
+            order_id = f"Order-{uuid.uuid4().hex[:6]}"
+            state['pending_orders'][order_id] = {
+                'id': order_id, 'pos': DESTINATIONS[dest_name],
+                'payload_kg': payload, 'high_priority': is_high_priority
+            }
+            log_event(state, f"📥 New {'high priority ' if is_high_priority else ''}order added: {order_id} for {dest_name}.")
+            st.rerun()
+
 def render_analytics_page(state):
-    # This function is unchanged
     """Renders the post-mission analytics dashboard."""
-    # ...
+    st.header("📊 Analytics Dashboard")
+    log_df = pd.DataFrame(state.get('completed_missions_log', []))
+
+    if log_df.empty:
+        st.warning("No missions completed yet. Run the simulation to generate data.")
+        return
+
+    c1, c2, c3 = st.columns(3)
+    completed_missions = log_df[log_df['outcome'] == 'Completed']
+    on_time = (completed_missions['actual_duration_sec'] <= completed_missions['planned_duration_sec']).sum()
+    on_time_rate = (on_time / len(completed_missions)) * 100 if not completed_missions.empty else 0
+    c1.metric("On-Time Delivery Rate", f"{on_time_rate:.1f}%")
+
+    log_df_valid_planned = completed_missions[completed_missions['planned_energy_wh'] > 0]
+    energy_error = (abs(log_df_valid_planned['actual_energy_wh'] - log_df_valid_planned['planned_energy_wh']) / log_df_valid_planned['planned_energy_wh']).mean() * 100
+    c2.metric("Energy Prediction Accuracy", f"{100-energy_error:.1f}%" if pd.notna(energy_error) else "N/A")
+
+    c3.metric("Total Missions Flown", len(log_df))
+
+    st.markdown("---")
+    st.subheader("Performance Over Time")
+    fig = px.line(log_df, x='completion_timestamp', y=['planned_duration_sec', 'actual_duration_sec'], title="Planned vs. Actual Mission Duration", labels={'value': 'Duration (s)', 'completion_timestamp': 'Simulation Time (s)'})
+    st.plotly_chart(fig, use_container_width=True)
+
 
 def main():
     st.set_page_config(layout="wide", page_title="Drone Delivery Simulator")
