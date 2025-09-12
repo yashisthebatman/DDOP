@@ -239,7 +239,7 @@ def render_map(state, planners):
                 fig.add_trace(go.Scatter3d(x=path_np[:,0], y=path_np[:,1], z=path_np[:,2], mode='lines', line=dict(color=color, width=4), name=f'{drone_id} Path'))
         fig.add_trace(go.Scatter3d(x=[drone['pos'][0]], y=[drone['pos'][1]], z=[drone['pos'][2]], mode='markers', marker=dict(size=8, color=color, symbol='cross'), name=drone_id))
     
-    # --- FIX 1: Set a better initial camera angle to show the 3D perspective ---
+    # FIX: Set a better initial camera angle to show the 3D perspective
     camera = dict(eye=dict(x=-1.5, y=-1.5, z=1))
     fig.update_layout(margin=dict(l=0,r=0,b=0,t=0), scene_camera=camera, scene=dict(xaxis_title='Lon',yaxis_title='Lat',zaxis_title='Alt (m)',aspectmode='data'), legend=dict(y=0.99,x=0.01))
     st.plotly_chart(fig, use_container_width=True)
@@ -251,7 +251,7 @@ def render_operations_page(state, planners):
         render_map(state, planners)
     with c2:
         st.subheader("System Log")
-        # --- FIX 2: Set a light text color for visibility in dark mode ---
+        # FIX: Set a light text color for visibility in dark mode
         log_html = "".join([f"<div style='font-size: 13px; font-family: monospace; color: #E0E0E0;'>{msg}</div>" for msg in state['log'][:20]])
         st.components.v1.html(f"<div style='height: 400px; overflow-y: scroll; border: 1px solid #444; padding: 5px;'>{log_html}</div>", height=410)
 
@@ -303,7 +303,7 @@ def render_operations_page(state, planners):
         submitted = c4.form_submit_button("Add Order")
         if submitted:
             order_id = f"Order-{uuid.uuid4().hex[:6]}"
-            # --- FIX 3 (Part of State Fix): Modify the state IN session_state ---
+            # FIX: Modify the state IN session_state
             st.session_state.system_state['pending_orders'][order_id] = {
                 'id': order_id, 'pos': DESTINATIONS[dest_name],
                 'payload_kg': payload, 'high_priority': is_high_priority
@@ -343,7 +343,7 @@ def main():
     planners = load_global_planners()
     if 'planning_future' not in st.session_state: st.session_state.planning_future = None
     
-    # --- FIX 3: Use st.session_state for robust state management ---
+    # FIX: Use st.session_state for robust state management
     # Load from file only ONCE at the beginning of a user's session.
     if 'system_state' not in st.session_state:
         st.session_state.system_state = system_state.load_state()

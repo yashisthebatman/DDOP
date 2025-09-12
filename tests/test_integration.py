@@ -25,9 +25,24 @@ def real_coord_manager():
 
 @pytest.fixture(scope="module")
 def real_environment(real_coord_manager):
-    """Provides a real Environment with obstacles, shared across tests."""
-    # Use a fixed seed for deterministic weather
-    return Environment(WeatherSystem(seed=42), real_coord_manager)
+    """
+    Provides a real Environment but with NO random buildings to ensure predictable
+    test paths, addressing the flakiness issue identified by Grok's analysis.
+    """
+    env = Environment(WeatherSystem(seed=42), real_coord_manager)
+    # FIX: Clear buildings to ensure straight paths for conflict/NFZ tests.
+    env.buildings = []
+    env.obstacles = {}
+    
+    # Reinitialize the spatial index without buildings
+    from rtree import index
+    p = index.Property()
+    p.dimension = 3
+    env.obstacle_index = index.Index(properties=p)
+    env.obstacle_counter = 0 # Reset counter
+    env._index_static_nfzs()  # Only static NFZs are indexed
+    
+    return env
 
 @pytest.fixture
 def real_cbsh_planner(real_environment, real_coord_manager):

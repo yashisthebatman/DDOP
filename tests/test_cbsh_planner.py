@@ -11,40 +11,38 @@ import numpy as np
 def mock_env():
     env = MagicMock(spec=Environment)
     env.is_point_obstructed.return_value = False
-    # The CBSHPlanner initializes a real A* planner which needs a real grid.
     coord_manager = CoordinateManager()
     grid_shape = (coord_manager.grid_width, coord_manager.grid_height, coord_manager.grid_depth)
     mock_grid = np.full(grid_shape, True)
     env.create_planning_grid.return_value = mock_grid
     return env
 
-# REMOVED the cbsh_planner fixture as it was causing the patching issue.
-
 @patch('planners.cbsh_planner.PathTimingSolver')
 @patch('planners.cbsh_planner.AnytimeRRTStar')
 @patch('planners.cbsh_planner.AStarPlanner')
 def test_solves_head_on_conflict(mock_astar, mock_rrt, mock_timing_solver, mock_env):
-    # DEFINITIVE FIX: Instantiate the planner *inside* the test, after the mocks have been applied.
     coord_manager = CoordinateManager()
     cbsh_planner = CBSHPlanner(mock_env, coord_manager)
     
-    # Use realistic, in-bounds coordinates for the test agents
     start1, goal1 = (-74.01, 40.71, 50), (-73.99, 40.71, 50)
     start2, goal2 = (-73.99, 40.71, 50), (-74.01, 40.71, 50)
     agent1 = Agent(id=1, start_pos=start1, goal_pos=goal1, config={})
     agent2 = Agent(id=2, start_pos=start2, goal_pos=goal2, config={})
 
-    # --- Mock the sub-planners to return predictable results ---
-    # A* finds a simple path
+    # FIX: Simplify the A* mock to return a 2-point path. This ensures the geometric
+    # path passed to the timing solver mock is consistent with the 2-point timed
+    # path returned by that mock, preventing logic errors in the CBSH search.
     mock_astar.return_value.find_path.return_value = [
         cbsh_planner.coord_manager.meters_to_grid(cbsh_planner.coord_manager.world_to_meters(start1)),
-        (1,1,1),
         cbsh_planner.coord_manager.meters_to_grid(cbsh_planner.coord_manager.world_to_meters(goal1)),
     ]
-    # RRT* finds a direct connection
-    mock_rrt.return_value.plan.return_value = ([start1, goal1], "Success")
     
-    # Mock timing solver with conflict resolution logic
+    def rrt_plan_side_effect(start_pos, goal_pos, env, coord_manager):
+        mock_instance = MagicMock()
+        mock_instance.plan.return_value = ([start_pos, goal_pos], "Success")
+        return mock_instance
+    mock_rrt.side_effect = rrt_plan_side_effect
+
     path1_default = [(start1, 0), (goal1, 10)]
     path1_wait = [(start1, 0), (start1, 2), (goal1, 12)]
     path2_default = [(start2, 0), (goal2, 10)]
@@ -58,11 +56,9 @@ def test_solves_head_on_conflict(mock_astar, mock_rrt, mock_timing_solver, mock_
     
     mock_timing_solver.return_value.find_timing.side_effect = timing_side_effect
     
-    # Run Planner
     solution = cbsh_planner.plan_fleet([agent1, agent2])
     
     assert solution is not None
     assert 1 in solution and 2 in solution
     
-    # The planner should have constrained agent 1, making it wait.
-    assert solution[1][-1][1] > solution[2][-1][1] # Agent 1 arrives later
+    assert solution[1][-1][1] > solution[2][-1][1]

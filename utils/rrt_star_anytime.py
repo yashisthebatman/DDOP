@@ -60,7 +60,13 @@ class AnytimeRRTStar:
             buffer = 200 # 200 meters buffer
             self.sampling_bounds_m = (min_m[0]-buffer, min_m[1]-buffer, MIN_ALTITUDE, max_m[0]+buffer, max_m[1]+buffer, MAX_ALTITUDE)
 
+        direct_dist = calculate_distance_3d(self.start_pos_m, self.goal_pos_m)
+
         while time.time() - start_time < time_budget_s:
+            # FIX: Early exit if a high-quality path is found (DeepSeek's suggestion)
+            if best_path_m and best_cost < direct_dist * 1.1:
+                break
+
             sample_m = self._get_random_sample_m()
             nearest_node = self._get_nearest_node(sample_m)
             new_node_pos_m = self._steer(nearest_node.position_m, sample_m)

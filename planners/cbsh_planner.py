@@ -17,6 +17,7 @@ from utils.a_star import AStarPlanner
 
 LOW_LEVEL_TIME_BUDGET = 2.0
 MIN_SEPARATION_METERS = 15.0
+CBS_MAX_NODES = 1000 # Safeguard against infinite loops
 
 class CBSHPlanner:
     def __init__(self, environment: Environment, coord_manager: CoordinateManager):
@@ -37,11 +38,14 @@ class CBSHPlanner:
             root.solution[agent.id] = timed_path
         root.cost = self._calculate_solution_cost(root.solution)
         open_set = [root]
-        while open_set:
+        
+        nodes_processed = 0
+        while open_set and nodes_processed < CBS_MAX_NODES:
+            nodes_processed += 1
             p_node = heapq.heappop(open_set)
             conflict = self._select_best_conflict(p_node.solution)
             if not conflict:
-                logging.info(f"CBSH search complete. Solution found with cost {p_node.cost}.")
+                logging.info(f"CBSH search complete in {nodes_processed} nodes. Solution found with cost {p_node.cost}.")
                 return p_node.solution
             for agent_id_to_constrain in [conflict.agent1_id, conflict.agent2_id]:
                 new_constraints = p_node.constraints.copy()
@@ -57,7 +61,11 @@ class CBSHPlanner:
                     child = CTNode(constraints=new_constraints, solution=new_solution)
                     child.cost = self._calculate_solution_cost(child.solution)
                     heapq.heappush(open_set, child)
-        logging.warning("CBSH search exhausted. No solution found.")
+        
+        if nodes_processed >= CBS_MAX_NODES:
+             logging.warning(f"CBSH search exceeded node limit of {CBS_MAX_NODES}. No solution found.")
+        else:
+            logging.warning("CBSH search exhausted. No solution found.")
         return None
 
     def _find_path_for_agent(self, agent: Agent, constraints: List[Constraint]) -> Optional[List[Tuple[Tuple, int]]]:
@@ -80,10 +88,7 @@ class CBSHPlanner:
             logging.warning(f"CBSH: A* failed to find a strategic path for {agent.id}.")
             return None
         
-        # DEFINITIVE FIX: Use a performant hybrid planner. A* provides a coarse path, which is simplified.
-        # RRT* is then used on small, localized bounding boxes for each segment.
         strategic_waypoints_world = [agent.start_pos]
-        # Simplify the path by taking every 10th point from the dense A* grid path.
         for grid_pos in strategic_grid_path[1:-1:10]: 
              strategic_waypoints_world.append(self.coord_manager.meters_to_world(self.coord_manager.grid_to_meters(grid_pos)))
         strategic_waypoints_world.append(agent.goal_pos)
@@ -93,13 +98,13 @@ class CBSHPlanner:
             p1, p2 = strategic_waypoints_world[i], strategic_waypoints_world[i+1]
             rrt = AnytimeRRTStar(p1, p2, self.env, self.coord_manager)
 
-            # Create a tight bounding box around the segment for the local RRT* search
             p1_m, p2_m = self.coord_manager.world_to_meters(p1), self.coord_manager.world_to_meters(p2)
             min_m, max_m = np.minimum(p1_m, p2_m), np.maximum(p1_m, p2_m)
-            buffer = 150 # 150m buffer to allow maneuvering
+            buffer = 1500 
             local_bounds = (min_m[0]-buffer, min_m[1]-buffer, MIN_ALTITUDE, max_m[0]+buffer, max_m[1]+buffer, MAX_ALTITUDE)
 
-            segment_path, status = rrt.plan(time_budget_s=0.2, custom_bounds_m=local_bounds)
+            # FIX: Increase time budget to allow RRT* to solve complex detours around large NFZs.
+            segment_path, status = rrt.plan(time_budget_s=0.5, custom_bounds_m=local_bounds)
             
             if not segment_path:
                 logging.warning(f"CBSH: RRT* failed on segment {i} for {agent.id}. Status: {status}")
