@@ -1,8 +1,42 @@
-# Ignore Python cache
+# --- Python ---
+# Byte-compiled / optimized / C extensions
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.so
 
-# Ignore virtual environment
+# --- Virtual Environment ---
+# A common name for the virtual environment folder
 venv/
-synthetic_drone_data.csv
+env/
+.venv/
+.env
+
+# --- Test Artifacts ---
+# Coverage reports and pytest cache
+.coverage
+htmlcov/
+.pytest_cache/
+
+# --- IDE / Editor Configuration ---
+.idea/
+.vscode/
+*.sublime-*
+
+# --- OS-specific ---
+.DS_Store
+Thumbs.db
+
+# --- Project-Specific Generated Files ---
+# The simulation state file should not be version controlled
 system_state.json
+
+# The ML model is a binary artifact and should be stored elsewhere (e.g., S3, MLflow)
+ml_predictor/*.joblib
+
+# This file is generated/appended during simulation runs and shouldn't be committed
+data/real_world_flight_segments.csv
+
+# If you generate any log files
+*.log
