@@ -1,3 +1,5 @@
+# FILE: requirements.txt
+
 # Core scientific and data handling libraries
 numpy
 pandas
@@ -9,6 +11,7 @@ Rtree         # Python wrapper for libspatialindex
 
 # Simulation environment
 opensimplex   # For Perlin/Simplex noise in weather simulation
+tinydb        # For simple, file-based state persistence
 
 # Machine Learning model handling
 scikit-learn
