@@ -3,6 +3,7 @@
 import os
 import numpy as np
 from tinydb import TinyDB
+import uuid  # FIX: Import the missing uuid module
 from config import HUBS, DESTINATIONS, DRONE_BATTERY_WH, DRONE_MAX_PAYLOAD_KG, MODEL_FILE_PATH
 
 # --- Constants ---
@@ -30,15 +31,17 @@ def get_initial_state():
             'available_at': 0.0
         }
 
-    pending_orders = {
-        name: {
+    # Start with a smaller, more manageable number of initial orders.
+    pending_orders = {}
+    initial_destinations = list(DESTINATIONS.items())[:5] # Start with 5 orders
+    for name, pos in initial_destinations:
+        order_id = f"Order-{uuid.uuid4().hex[:6]}"
+        pending_orders[order_id] = {
             'pos': pos,
-            # Assign a random, realistic payload to each predefined destination
             'payload_kg': round(np.random.uniform(0.5, DRONE_MAX_PAYLOAD_KG - 0.5), 2),
-            'id': name,
+            'id': order_id,
             'high_priority': False
-        } for name, pos in DESTINATIONS.items()
-    }
+        }
 
     return {
         'drones': drones,

@@ -58,6 +58,8 @@ class CBSHPlanner:
                 if new_timed_path:
                     new_solution = p_node.solution.copy()
                     new_solution[agent_id_to_constrain] = new_timed_path
+                    if new_solution == p_node.solution:
+                        continue
                     child = CTNode(constraints=new_constraints, solution=new_solution)
                     child.cost = self._calculate_solution_cost(child.solution)
                     heapq.heappush(open_set, child)
@@ -94,24 +96,27 @@ class CBSHPlanner:
         strategic_waypoints_world.append(agent.goal_pos)
         
         full_geometric_path = [strategic_waypoints_world[0]]
+        rrt_success = True
         for i in range(len(strategic_waypoints_world) - 1):
             p1, p2 = strategic_waypoints_world[i], strategic_waypoints_world[i+1]
             rrt = AnytimeRRTStar(p1, p2, self.env, self.coord_manager)
-
             p1_m, p2_m = self.coord_manager.world_to_meters(p1), self.coord_manager.world_to_meters(p2)
             min_m, max_m = np.minimum(p1_m, p2_m), np.maximum(p1_m, p2_m)
             buffer = 1500 
             local_bounds = (min_m[0]-buffer, min_m[1]-buffer, MIN_ALTITUDE, max_m[0]+buffer, max_m[1]+buffer, MAX_ALTITUDE)
 
-            # FIX: Increase time budget to allow RRT* to solve complex detours around large NFZs.
-            segment_path, status = rrt.plan(time_budget_s=0.5, custom_bounds_m=local_bounds)
+            segment_path, status = rrt.plan(time_budget_s=LOW_LEVEL_TIME_BUDGET, custom_bounds_m=local_bounds)
             
             if not segment_path:
-                logging.warning(f"CBSH: RRT* failed on segment {i} for {agent.id}. Status: {status}")
-                return None
+                logging.warning(f"CBSH: RRT* failed on segment {i} for {agent.id}. Status: {status}. Planning will fall back to A* waypoints.")
+                rrt_success = False
+                break
             
             full_geometric_path.extend(segment_path[1:])
         
+        if not rrt_success:
+            full_geometric_path = [self.coord_manager.meters_to_world(self.coord_manager.grid_to_meters(gp)) for gp in strategic_grid_path]
+
         timed_path = self.timing_solver.find_timing(full_geometric_path, constraints)
         if not timed_path:
             logging.warning(f"CBSH: Timing Solver failed for {agent.id} with {len(constraints)} constraints.")
@@ -119,7 +124,7 @@ class CBSHPlanner:
         return timed_path
 
     def _calculate_solution_cost(self, solution: Dict) -> float:
-        total_cost = 0
+        total_cost = 0.0
         for agent_id, path in solution.items():
             if not path: continue
             agent = self.agents_map[agent_id]

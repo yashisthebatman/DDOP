@@ -40,8 +40,6 @@ def load_global_planners():
     Initializes and caches the core, heavy objects for planning and simulation.
     This runs only once per session.
     """
-    # NOTE: We load state here once to initialize planners, but the main app
-    # will use the session_state for interactions.
     state = system_state.load_state()
     log_event(state, "Loading environment and global planners...")
     coord_manager = CoordinateManager()
@@ -139,9 +137,11 @@ def update_simulation(state, planners):
 
                 path = mission.get('path_world_coords', [])
                 if path:
+                    # FIX: Correct interpolation logic for real-time movement.
                     path_index = int(flight_progress * (len(path) - 1))
                     if path_index < len(path) - 1:
                         p1, p2 = np.array(path[path_index]), np.array(path[path_index + 1])
+                        # Calculate progress along the current segment
                         segment_progress = (flight_progress * (len(path) - 1)) - path_index
                         drone['pos'] = tuple(p1 + segment_progress * (p2 - p1))
                     else:
@@ -150,6 +150,8 @@ def update_simulation(state, planners):
                 energy_consumed = flight_progress * mission.get('total_planned_energy', 0)
                 drone['battery'] = mission.get('start_battery', DRONE_BATTERY_WH) - energy_consumed
 
+        # After a drone has completed all its stops, it returns to its designated end hub.
+        # This check sees if the overall mission time (including maneuvers) has elapsed.
         if mission['mission_time_elapsed'] >= mission.get('total_planned_time', float('inf')):
             missions_to_complete.append(mission_id)
 
@@ -179,8 +181,10 @@ def update_simulation(state, planners):
                 temp_predictor = EnergyTimePredictor()
                 stops = mission.get('stops', [])
                 if stops:
+                    # Use the final stop for feature extraction
+                    final_stop_pos = mission['destinations'][-1]
                     features = temp_predictor._extract_features(
-                        mission['start_pos'], stops[-1]['pos'], 
+                        mission['start_pos'], final_stop_pos, 
                         mission['payload_kg'], [0,0,0], None
                     )
                     features['actual_time'] = actual_duration
@@ -230,18 +234,31 @@ def render_map(state, planners):
         fig.add_trace(go.Mesh3d(x=[zone[0],zone[2],zone[2],zone[0]]*2, y=[zone[1],zone[1],zone[3],zone[3]]*2, z=[0,0,0,0,MAX_ALTITUDE,MAX_ALTITUDE,MAX_ALTITUDE,MAX_ALTITUDE], i=[7,0,0,0,4,4,6,6,4,0,3,2], j=[3,4,1,2,5,6,5,2,0,1,6,3], k=[0,7,2,3,6,7,1,1,5,5,7,6], color='rgba(255,0,0,0.5)', name='Dynamic NFZ'))
 
     drone_colors = cycle(px.colors.qualitative.Plotly)
+    
+    # Store drone data to draw paths later, ensuring paths are drawn on top of markers.
+    drones_with_paths = []
+
     for drone_id, drone in state['drones'].items():
         color = next(drone_colors)
+        fig.add_trace(go.Scatter3d(x=[drone['pos'][0]], y=[drone['pos'][1]], z=[drone['pos'][2]], mode='markers', marker=dict(size=8, color=color, symbol='cross'), name=drone_id))
+        
         if drone['status'] in ['EN ROUTE', 'EMERGENCY_RETURN', 'PERFORMING_DELIVERY', 'AVOIDING'] and drone['mission_id'] in state['active_missions']:
             path = state['active_missions'][drone['mission_id']].get('path_world_coords', [])
             if path:
-                path_np = np.array(path)
-                fig.add_trace(go.Scatter3d(x=path_np[:,0], y=path_np[:,1], z=path_np[:,2], mode='lines', line=dict(color=color, width=4), name=f'{drone_id} Path'))
-        fig.add_trace(go.Scatter3d(x=[drone['pos'][0]], y=[drone['pos'][1]], z=[drone['pos'][2]], mode='markers', marker=dict(size=8, color=color, symbol='cross'), name=drone_id))
+                drones_with_paths.append({'path': path, 'color': color, 'id': drone_id})
     
-    # FIX: Set a better initial camera angle to show the 3D perspective
+    # FIX: Draw paths AFTER drawing all drone markers.
+    for drone_info in drones_with_paths:
+        path_np = np.array(drone_info['path'])
+        fig.add_trace(go.Scatter3d(x=path_np[:,0], y=path_np[:,1], z=path_np[:,2], mode='lines', line=dict(color=drone_info['color'], width=4), name=f"{drone_info['id']} Path"))
+
     camera = dict(eye=dict(x=-1.5, y=-1.5, z=1))
-    fig.update_layout(margin=dict(l=0,r=0,b=0,t=0), scene_camera=camera, scene=dict(xaxis_title='Lon',yaxis_title='Lat',zaxis_title='Alt (m)',aspectmode='data'), legend=dict(y=0.99,x=0.01))
+    fig.update_layout(
+        margin=dict(l=0,r=0,b=0,t=0), 
+        scene_camera=camera, 
+        scene=dict(xaxis_title='Lon', yaxis_title='Lat', zaxis_title='Alt (m)', aspectmode='cube'),
+        legend=dict(y=0.99,x=0.01)
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 def render_operations_page(state, planners):
@@ -251,7 +268,6 @@ def render_operations_page(state, planners):
         render_map(state, planners)
     with c2:
         st.subheader("System Log")
-        # FIX: Set a light text color for visibility in dark mode
         log_html = "".join([f"<div style='font-size: 13px; font-family: monospace; color: #E0E0E0;'>{msg}</div>" for msg in state['log'][:20]])
         st.components.v1.html(f"<div style='height: 400px; overflow-y: scroll; border: 1px solid #444; padding: 5px;'>{log_html}</div>", height=410)
 
@@ -265,7 +281,8 @@ def render_operations_page(state, planners):
     status_cols[3].metric("Completed Orders", len(state['completed_orders']))
     
     for drone_id, drone in sorted(state['drones'].items()):
-        with st.expander(f"**{drone_id}** ({drone['status']}) - Battery: {drone['battery']:.1f}Wh - Location: {drone['home_hub']}"):
+        battery_percent = (drone['battery'] / DRONE_BATTERY_WH) * 100
+        with st.expander(f"**{drone_id}** ({drone['status']}) - Battery: {battery_percent:.0f}% - Location: {drone['home_hub']}"):
             if drone['status'] not in ['IDLE', 'RECHARGING']:
                 mission = state['active_missions'].get(drone['mission_id'])
                 if mission:
@@ -294,22 +311,36 @@ def render_operations_page(state, planners):
                 st.write("Awaiting task.")
 
     st.markdown("---")
-    with st.form("add_order_form"):
-        st.subheader("Add New Order")
-        c1, c2, c3, c4 = st.columns([2,1,1,1])
-        dest_name = c1.selectbox("Destination", DESTINATIONS.keys())
-        payload = c2.number_input("Payload (kg)", min_value=0.1, max_value=DRONE_MAX_PAYLOAD_KG, value=1.0, step=0.5)
-        is_high_priority = c3.checkbox("High Priority", help="High priority orders trigger dispatch immediately.")
-        submitted = c4.form_submit_button("Add Order")
-        if submitted:
-            order_id = f"Order-{uuid.uuid4().hex[:6]}"
-            # FIX: Modify the state IN session_state
-            st.session_state.system_state['pending_orders'][order_id] = {
-                'id': order_id, 'pos': DESTINATIONS[dest_name],
-                'payload_kg': payload, 'high_priority': is_high_priority
-            }
-            log_event(st.session_state.system_state, f"📥 New {'high priority ' if is_high_priority else ''}order added: {order_id} for {dest_name}.")
+    
+    # FIX: Add a manual dispatch button
+    c1_form, c2_form = st.columns([3,1])
+    with c1_form:
+        with st.form("add_order_form"):
+            st.subheader("Add New Order")
+            c1, c2, c3, c4 = st.columns([2,1,1,1])
+            dest_name = c1.selectbox("Destination", DESTINATIONS.keys())
+            payload = c2.number_input("Payload (kg)", min_value=0.1, max_value=DRONE_MAX_PAYLOAD_KG, value=1.0, step=0.5)
+            is_high_priority = c3.checkbox("High Priority", help="High priority orders trigger dispatch immediately.")
+            submitted = c4.form_submit_button("Add Order")
+            if submitted:
+                order_id = f"Order-{uuid.uuid4().hex[:6]}"
+                st.session_state.system_state['pending_orders'][order_id] = {
+                    'id': order_id, 'pos': DESTINATIONS[dest_name],
+                    'payload_kg': payload, 'high_priority': is_high_priority
+                }
+                log_event(st.session_state.system_state, f"📥 New {'high priority ' if is_high_priority else ''}order added: {order_id} for {dest_name}.")
+                st.rerun()
+
+    with c2_form:
+        st.subheader("Dispatch Control")
+        if st.button("🚚 Dispatch Missions", use_container_width=True, type="primary"):
+            dispatched = planners['dispatcher'].dispatch_missions(st.session_state.system_state)
+            if dispatched:
+                log_event(st.session_state.system_state, "OPERATOR: Dispatch successful. Missions sent for planning.")
+            else:
+                log_event(st.session_state.system_state, "OPERATOR: Dispatch failed. (Not enough orders or no drones available).")
             st.rerun()
+
 
 def render_analytics_page(state):
     st.header("📊 Analytics Dashboard")
@@ -343,12 +374,9 @@ def main():
     planners = load_global_planners()
     if 'planning_future' not in st.session_state: st.session_state.planning_future = None
     
-    # FIX: Use st.session_state for robust state management
-    # Load from file only ONCE at the beginning of a user's session.
     if 'system_state' not in st.session_state:
         st.session_state.system_state = system_state.load_state()
 
-    # Use the state from the session for all subsequent operations.
     state = st.session_state.system_state
     
     with st.sidebar:
@@ -363,7 +391,6 @@ def main():
         st.metric("Simulation Time", f"{state['simulation_time']:.1f}s")
         if st.button("⚠️ Reset Simulation State", use_container_width=True, type="secondary"):
             planners['env'].remove_dynamic_obstacles()
-            # Reset both the session state and the file on disk.
             st.session_state.system_state = system_state.reset_state_file()
             log_event(st.session_state.system_state, "--- SYSTEM STATE RESET ---"); st.rerun()
 
@@ -372,9 +399,8 @@ def main():
     elif page == "Analytics Dashboard":
         render_analytics_page(state)
 
-    # --- Core simulation loop will only run if the toggle is active ---
     if state.get('simulation_running', False):
-        fleet_manager, dispatcher, executor, env = planners['fleet_manager'], planners['dispatcher'], planners['executor'], planners['env']
+        fleet_manager, executor, env = planners['fleet_manager'], planners['executor'], planners['env']
         
         event_injector.inject_random_event(state, env)
         contingency_planner.check_for_contingencies(state, planners)
@@ -405,11 +431,11 @@ def main():
             log_event(state, "🤖 Fleet requires planning. Submitting to background worker...")
             st.session_state.planning_future = executor.submit(fleet_manager.plan_pending_missions, state)
 
-        dispatched = dispatcher.dispatch_missions(state)
-        if dispatched: log_event(state, "🚚 Dispatcher created new missions.")
+        # FIX: Remove the automatic dispatch call from the main loop
+        # dispatched = dispatcher.dispatch_missions(state)
+        # if dispatched: log_event(state, "🚚 Dispatcher created new missions.")
         update_simulation(state, planners)
 
-    # Persist the (potentially modified) session state to disk at the end of every script run.
     system_state.save_state(state)
     if state.get('simulation_running', False):
         time.sleep(SIMULATION_UI_REFRESH_INTERVAL); st.rerun()

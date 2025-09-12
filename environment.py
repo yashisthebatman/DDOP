@@ -78,35 +78,61 @@ class Environment:
         return obstacle_id
 
     def _generate_and_index_buildings(self) -> List[Building]:
+        """
+        Generates a more realistic, dense city block layout.
+        """
         buildings = []
         np.random.seed(42)
         all_poi = list(HUBS.values()) + list(DESTINATIONS.values())
 
-        # FIX: Loop until 20 valid buildings are generated, not just 20 times.
-        while len(buildings) < 20:
-            center_x = np.random.uniform(AREA_BOUNDS[0], AREA_BOUNDS[2])
-            center_y = np.random.uniform(AREA_BOUNDS[1], AREA_BOUNDS[3])
-            width_deg, height_deg = np.random.uniform(0.0001, 0.0003), np.random.uniform(0.0001, 0.0003)
-            altitude = np.random.uniform(50, MAX_ALTITUDE)
-            
-            is_conflicting = False
-            for poi in all_poi:
-                poi_lon, poi_lat, _ = poi
-                if (center_x - width_deg / 2 <= poi_lon <= center_x + width_deg / 2 and
-                    center_y - height_deg / 2 <= poi_lat <= center_y + height_deg / 2):
-                    is_conflicting = True
-                    break
-            
-            if is_conflicting:
-                continue # Discard conflicting building and try again.
+        # Define street grid parameters
+        num_avenues = 10  # North-South streets
+        num_streets = 20 # East-West streets
 
-            building = Building(id=len(buildings), center_xy=(center_x, center_y), size_xy=(width_deg, height_deg), height=altitude)
-            buildings.append(building)
-            bottom_left_world = (center_x - width_deg / 2, center_y - height_deg / 2, 0)
-            top_right_world = (center_x + width_deg / 2, center_y + height_deg / 2, altitude)
-            min_mx, min_my, _ = self.coord_manager.world_to_meters(bottom_left_world)
-            max_mx, max_my, _ = self.coord_manager.world_to_meters(top_right_world)
-            self._add_obstacle_to_index((min_mx, min_my, 0, max_mx, max_my, altitude))
+        lon_range = AREA_BOUNDS[2] - AREA_BOUNDS[0]
+        lat_range = AREA_BOUNDS[3] - AREA_BOUNDS[1]
+
+        # Calculate block sizes, leaving space for streets
+        block_width = lon_range / num_avenues * 0.75
+        block_height = lat_range / num_streets * 0.75
+        
+        for i in range(num_avenues):
+            for j in range(num_streets):
+                # Calculate center of the block
+                center_x = AREA_BOUNDS[0] + (i + 0.5) * (lon_range / num_avenues)
+                center_y = AREA_BOUNDS[1] + (j + 0.5) * (lat_range / num_streets)
+
+                # Skip blocks that contain a Hub or Destination
+                is_conflicting = False
+                for poi in all_poi:
+                    poi_lon, poi_lat, _ = poi
+                    if (abs(center_x - poi_lon) < block_width and
+                        abs(center_y - poi_lat) < block_height):
+                        is_conflicting = True
+                        break
+                if is_conflicting:
+                    continue
+
+                # DEFINITIVE FIX: Increase this value to make buildings more sparse.
+                # 0.6 means 60% of blocks will be empty, only 40% will have buildings.
+                if np.random.rand() < 0.6: 
+                    continue
+                
+                # Vary height - taller buildings downtown (south)
+                height_factor = 1.0 - (j / num_streets) # Taller in the south
+                altitude = np.random.uniform(30, 120) * (1 + height_factor)
+                altitude = min(altitude, MAX_ALTITUDE * 0.9) # Cap height
+
+                building = Building(id=len(buildings), center_xy=(center_x, center_y), size_xy=(block_width, block_height), height=altitude)
+                buildings.append(building)
+                
+                # Index the building obstacle
+                bottom_left_world = (center_x - block_width / 2, center_y - block_height / 2, 0)
+                top_right_world = (center_x + block_width / 2, center_y + block_height / 2, altitude)
+                min_mx, min_my, _ = self.coord_manager.world_to_meters(bottom_left_world)
+                max_mx, max_my, _ = self.coord_manager.world_to_meters(top_right_world)
+                self._add_obstacle_to_index((min_mx, min_my, 0, max_mx, max_my, altitude))
+                
         return buildings
 
     def _index_static_nfzs(self):

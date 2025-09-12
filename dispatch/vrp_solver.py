@@ -35,9 +35,11 @@ class VRPSolver:
                     cost_matrix[from_node, to_node] = 0
                     continue
                 p1, p2 = locations[from_node], locations[to_node]
-                payload = DRONE_MAX_PAYLOAD_KG / 2
+                # Use a realistic payload and the predictor for a much better cost estimate
+                payload = DRONE_MAX_PAYLOAD_KG / 2 
                 wind = [0, 0, 0]
                 time, energy = self.predictor.predict(p1, p2, payload, wind, None)
+                # Combine time and energy for a holistic cost, scaled to an integer
                 cost_matrix[from_node, to_node] = int((time + energy) * 10)
         
         # Allow travel from any location that is a hub to the sink node at zero cost
@@ -129,10 +131,8 @@ class VRPSolver:
 
             # The end hub is the node visited just before the sink node
             last_real_node = route[-2]
-            if last_real_node >= num_hubs: # If the last stop is an order, find the next hub
-                end_hub_pos = HUBS[min(HUBS, key=lambda h: np.linalg.norm(np.array(HUBS[h]) - np.array(order_map[last_real_node]['pos'])))]
-                end_hub_id = [k for k,v in HUBS.items() if v == end_hub_pos][0]
-
+            if last_real_node >= num_hubs: # If the last stop is an order, find the closest hub
+                end_hub_id = min(HUBS, key=lambda h: np.linalg.norm(np.array(HUBS[h]) - np.array(order_map[last_real_node]['pos'])))
             elif last_real_node < num_hubs:
                 end_hub_id = data['hub_names'][last_real_node]
             else:
