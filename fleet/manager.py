@@ -53,8 +53,9 @@ class FleetManager:
 
     def plan_pending_missions(self, state: Dict) -> Tuple[bool, Dict]:
         """
-        Finds all drones in a 'PLANNING' state and attempts to plan a deconflicted
-        fleet-wide solution for them.
+        Finds all drones in 'PLANNING' state, runs the CBSH planner, and
+        returns a dictionary of updates to be applied to the main state, rather
+        than modifying the state directly. This makes it thread-safe.
         """
         missions_to_plan = []
         drones_in_planning = []
@@ -64,42 +65,38 @@ class FleetManager:
                 if mission_id and mission_id in state['active_missions']:
                     missions_to_plan.append(state['active_missions'][mission_id])
                     drones_in_planning.append(drone_id)
-                else:
-                    logging.warning(f"Drone {drone_id} is PLANNING but has no valid mission. Reverting to IDLE.")
-                    drone['status'] = 'IDLE'
 
         if not missions_to_plan:
             return True, {"message": "No missions in PLANNING state."}
 
-        active_agents: List[Agent] = []
-        for m in missions_to_plan:
-            config = {'payload_kg': m['payload_kg']}
-            agent = Agent(id=m['drone_id'], start_pos=m['start_pos'], goal_pos=m['destinations'][-1], config=config)
-            active_agents.append(agent)
-
+        active_agents: List[Agent] = [
+            Agent(id=m['drone_id'], start_pos=m['start_pos'], goal_pos=m['destinations'][-1], config={'payload_kg': m['payload_kg']})
+            for m in missions_to_plan
+        ]
+        
         if not active_agents:
             return True, {"message": "No active agents to plan for."}
-        
+
         logging.info(f"FleetManager initiating CBSH planning for {len(active_agents)} agents.")
         solution = self.cbs_planner.plan_fleet(active_agents)
+
+        # --- Prepare update dictionaries instead of direct modification ---
+        drone_updates = {}
+        mission_updates = {}
+        successful_mission_ids = []
+        mission_failures = []
         
         if not solution:
-            logging.error("CBSH planning FAILED for the fleet. Reverting drones to IDLE.")
+            logging.error("CBSH planning FAILED for the fleet.")
             for agent_id in drones_in_planning:
-                drone = state['drones'][agent_id]
-                drone['status'] = 'IDLE'
-                mission_id = drone.get('mission_id')
-                if mission_id and mission_id in state['active_missions']:
-                    mission = state['active_missions'][mission_id]
-                    logging.error(f"Orders from failed mission {mission_id} need to be re-queued: {mission['order_ids']}")
-                    # A robust implementation would re-create these in pending_orders, but this is complex
-                    # as the original order objects are gone. For now, we delete the failed mission.
-                    del state['active_missions'][mission_id]
-                drone['mission_id'] = None
-            return False, {"error": "CBS could not find a solution for the fleet."}
+                drone_updates[agent_id] = {'status': 'IDLE', 'mission_id': None}
+                mission_id = state['drones'][agent_id].get('mission_id')
+                if mission_id: mission_failures.append(mission_id)
+            return False, {"drone_updates": drone_updates, "mission_failures": mission_failures, "error": "CBS could not find a solution."}
 
-        logging.info("CBSH planning successful. Updating missions.")
+        logging.info("CBSH planning successful. Preparing mission updates.")
         
+        solved_agents = set(solution.keys())
         for agent_id, path in solution.items():
             drone = state['drones'][agent_id]
             mission_id = drone['mission_id']
@@ -108,25 +105,33 @@ class FleetManager:
             world_path = [p[0] for p in path]
             smoothed_path = self.cbs_planner.smoother.smooth_path(world_path, self.cbs_planner.env)
             
+            total_energy = 0
             if path and len(path) > 1:
-                total_energy, p_prev = 0, None
                 for i in range(len(world_path) - 1):
                     p1, p2 = world_path[i], world_path[i+1]
                     wind = self.cbs_planner.env.weather.get_wind_at_location(*p1)
-                    _, energy_pred = self.predictor.predict(p1, p2, mission['payload_kg'], wind, p_prev)
+                    _, energy_pred = self.predictor.predict(p1, p2, mission['payload_kg'], wind, world_path[i-1] if i>0 else None)
                     total_energy += energy_pred
-                    p_prev = p1
                 
-                mission['path_world_coords'] = smoothed_path
-                mission['total_planned_energy'] = total_energy
-                mission['total_planned_time'] = path[-1][1]
-                mission['start_time'] = state['simulation_time']
-                mission['start_battery'] = drone['battery']
-                
-                drone['status'] = 'EN ROUTE'
-                logging.info(f"Drone {agent_id} is now EN ROUTE for mission {mission_id}.")
+                mission_updates[mission_id] = {
+                    'path_world_coords': smoothed_path,
+                    'total_planned_energy': total_energy,
+                    'total_planned_time': path[-1][1],
+                    'start_time': state['simulation_time'],
+                    'start_battery': drone['battery']
+                }
+                drone_updates[agent_id] = {'status': 'EN ROUTE'}
+                successful_mission_ids.append(mission_id)
             else:
-                logging.warning(f"Planning for {agent_id} resulted in an invalid path. Reverting to IDLE.")
-                drone['status'] = 'IDLE'
-        
-        return True, {"message": "Planning cycle completed."}
+                 # Handle cases where a specific agent's plan resulted in an empty path
+                drone_updates[agent_id] = {'status': 'IDLE', 'mission_id': None}
+                mission_failures.append(mission_id)
+
+        # Handle agents that were sent for planning but got no solution
+        unsolved_agents = [agent_id for agent_id in drones_in_planning if agent_id not in solved_agents]
+        for agent_id in unsolved_agents:
+            drone_updates[agent_id] = {'status': 'IDLE', 'mission_id': None}
+            mission_id = state['drones'][agent_id].get('mission_id')
+            if mission_id: mission_failures.append(mission_id)
+            
+        return True, {"drone_updates": drone_updates, "mission_updates": mission_updates, "successful_mission_ids": successful_mission_ids, "mission_failures": mission_failures}

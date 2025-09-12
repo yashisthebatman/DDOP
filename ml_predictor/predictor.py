@@ -50,11 +50,12 @@ class EnergyTimePredictor:
     def __init__(self):
         self.models = None
         self.fallback_predictor = PhysicsBasedPredictor()
-        # Define feature names to ensure consistency between training and prediction
+        
+        # FIX: Align feature names with the model's training columns based on the pytest warning.
         self.feature_names = [
             'distance_3d', 'altitude_change', 'horizontal_distance', 'payload_kg',
-            'wind_speed', 'wind_alignment', 'turning_angle', 'start_altitude', 
-            'end_altitude', 'abs_altitude_change'
+            'wind_speed', 'wind_alignment', 'turning_angle', 'p1_alt', 
+            'p2_alt', 'abs_alt_change'
         ]
         self.load_model()
 
@@ -77,9 +78,6 @@ class EnergyTimePredictor:
             return self.fallback_predictor.predict(p1, p2, payload_kg, wind_vector, p_prev)
         try:
             features = self._extract_features(p1, p2, payload_kg, wind_vector, p_prev)
-            
-            # FIX: Create a named DataFrame to prevent scikit-learn UserWarning
-            # and ensure robust prediction by matching feature names.
             features_df = pd.DataFrame([features], columns=self.feature_names)
             
             time_pred = self.models['time_model'].predict(features_df)[0]

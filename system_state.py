@@ -40,6 +40,7 @@ def get_initial_state():
         'drones': drones,
         'pending_orders': pending_orders,
         'active_missions': {},
+        'completed_missions': {},
         'completed_orders': [],
         'simulation_time': 0.0,
         'log': ["System initialized. Welcome to the Drone Delivery Simulator."],

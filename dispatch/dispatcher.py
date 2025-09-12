@@ -82,10 +82,10 @@ class Dispatcher:
             drone['status'] = 'PLANNING'
             drone['mission_id'] = mission_id
             
+            # MODIFICATION: Do NOT delete orders here. They are deleted in the main
+            # app loop only after planning succeeds. This prevents order loss.
             for order_id in order_ids:
-                if order_id in state['pending_orders']:
-                    del state['pending_orders'][order_id]
-                    dispatched_order_ids.add(order_id)
+                dispatched_order_ids.add(order_id)
 
         if dispatched_order_ids:
             logging.info(f"Dispatcher created {len(tours)} new missions for orders: {dispatched_order_ids}")
