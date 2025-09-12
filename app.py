@@ -2,12 +2,14 @@
 
 import streamlit as st
 import plotly.graph_objects as go
+import plotly.express as px
 import time
 import pandas as pd
 import numpy as np
 from itertools import cycle
 import uuid
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 from config import *
@@ -17,9 +19,10 @@ from ml_predictor.predictor import EnergyTimePredictor
 from utils.coordinate_manager import CoordinateManager
 from planners.cbsh_planner import CBSHPlanner
 from fleet.manager import FleetManager, Mission
-from fleet.cbs_components import Agent
 from dispatch.vrp_solver import VRPSolver
 from dispatch.dispatcher import Dispatcher
+# Import the new retrainer module
+import training.retrainer as retrainer
 
 # --- Helper & UI Functions ---
 
@@ -33,16 +36,20 @@ def load_global_planners():
     Initializes and caches the core, heavy objects for planning and simulation.
     This runs only once per session.
     """
-    log_event(system_state.load_state(), "Loading environment and global planners...")
+    state = system_state.load_state()
+    log_event(state, "Loading environment and global planners...")
     coord_manager = CoordinateManager()
     env = Environment(WeatherSystem(), coord_manager)
+    
     predictor = EnergyTimePredictor()
+    predictor.load_model(state.get('active_model_path', MODEL_FILE_PATH))
+    
     cbsh_planner = CBSHPlanner(env, coord_manager)
     fleet_manager = FleetManager(cbsh_planner, predictor)
     vrp_solver = VRPSolver(predictor)
     dispatcher = Dispatcher(vrp_solver)
     executor = ThreadPoolExecutor(max_workers=2) # For async planning
-    log_event(system_state.load_state(), "✅ Planners and Dispatcher ready.")
+    log_event(state, "✅ Planners and Dispatcher ready.")
     return {
         "env": env,
         "predictor": predictor,
@@ -51,40 +58,6 @@ def load_global_planners():
         "dispatcher": dispatcher,
         "executor": executor
     }
-
-def render_fleet_table(state):
-    """Displays a real-time table of the entire drone fleet's status."""
-    drones_data = []
-    for drone_id, drone in state['drones'].items():
-        battery_percent = (drone['battery'] / DRONE_BATTERY_WH) * 100
-        location_str = f"({drone['pos'][0]:.4f}, {drone['pos'][1]:.4f}, {drone['pos'][2]:.1f}m)"
-        payload_kg = 0.0
-        mission_id = drone.get('mission_id')
-        if mission_id and mission_id in state['active_missions']:
-            payload_kg = state['active_missions'][mission_id].get('payload_kg', 0.0)
-
-        drones_data.append({
-            "ID": drone_id,
-            "Status": drone['status'],
-            "Location": location_str,
-            "Battery": battery_percent,
-            "Payload (kg)": f"{payload_kg:.1f}",
-            "Mission ID": mission_id or "—"
-        })
-    df = pd.DataFrame(drones_data)
-    st.subheader("🚀 Fleet Status")
-    header_cols = st.columns((2, 2, 4, 3, 2, 3))
-    headers = ["Drone ID", "Status", "Location", "Battery (%)", "Payload", "Mission ID"]
-    for col, header in zip(header_cols, headers): col.markdown(f"**{header}**")
-    st.markdown("---")
-    for _, row in df.iterrows():
-        row_cols = st.columns((2, 2, 4, 3, 2, 3))
-        row_cols[0].write(row['ID'])
-        row_cols[1].write(row['Status'])
-        row_cols[2].write(row['Location'])
-        row_cols[3].progress(int(row['Battery']), text=f"{row['Battery']:.1f}%")
-        row_cols[4].write(row['Payload (kg)'])
-        row_cols[5].code(row['Mission ID'])
 
 def update_simulation(state, fleet_manager):
     """Advances the simulation by one time step and updates drone/mission states."""
@@ -123,6 +96,42 @@ def update_simulation(state, fleet_manager):
         mission = state['active_missions'][mission_id]
         drone_id = mission['drone_id']
         drone = state['drones'][drone_id]
+        
+        # --- PHASE 4: Create Analytics Log and Real-World Data ---
+        actual_duration = state['simulation_time'] - mission['start_time']
+        actual_energy = mission['start_battery'] - drone['battery']
+        
+        log_entry = {
+            "mission_id": mission_id,
+            "drone_id": drone_id,
+            "completion_timestamp": state['simulation_time'],
+            "planned_duration_sec": mission['total_planned_time'],
+            "actual_duration_sec": actual_duration,
+            "planned_energy_wh": mission['total_planned_energy'],
+            "actual_energy_wh": actual_energy,
+            "number_of_stops": len(mission['destinations']),
+            "outcome": "Completed",
+        }
+        state['completed_missions_log'].append(log_entry)
+        
+        # Log data for MLOps feedback loop (as a single segment)
+        try:
+            temp_predictor = EnergyTimePredictor()
+            features = temp_predictor._extract_features(
+                mission['start_pos'], mission['destinations'][-1], 
+                mission['payload_kg'], [0,0,0], None # NOTE: Wind is not captured in sim, using placeholder
+            )
+            features['actual_time'] = actual_duration
+            features['actual_energy'] = actual_energy
+            
+            feedback_df = pd.DataFrame([features])
+            csv_path = 'data/real_world_flight_segments.csv'
+            os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+            write_header = not os.path.exists(csv_path)
+            feedback_df.to_csv(csv_path, mode='a', header=write_header, index=False)
+        except Exception as e:
+            log_event(state, f"⚠️ Could not log mission data for ML feedback: {e}")
+
         log_event(state, f"🏁 {drone_id} completed mission {mission_id}.")
         drone['status'] = 'RECHARGING'
         drone['mission_id'] = None
@@ -155,26 +164,8 @@ def render_map(state, planners):
     fig.update_layout(margin=dict(l=0,r=0,b=0,t=0), scene=dict(xaxis_title='Lon',yaxis_title='Lat',zaxis_title='Alt (m)',aspectmode='data'), legend=dict(y=0.99,x=0.01))
     st.plotly_chart(fig, use_container_width=True)
 
-def main():
-    st.set_page_config(layout="wide", page_title="Drone Delivery Simulator")
-    st.title("🚁 Continuous Drone Delivery Simulator")
-    
-    state = system_state.load_state()
-    planners = load_global_planners()
-    fleet_manager, dispatcher, executor = planners['fleet_manager'], planners['dispatcher'], planners['executor']
-    if 'planning_future' not in st.session_state: st.session_state.planning_future = None
-
-    with st.sidebar:
-        st.header("Master Control")
-        sim_running = state.get('simulation_running', False)
-        if st.button("▶️ Run", disabled=sim_running, use_container_width=True):
-            state['simulation_running'] = True; log_event(state, "Simulation started."); st.rerun()
-        if st.button("⏸️ Pause", disabled=not sim_running, use_container_width=True):
-            state['simulation_running'] = False; log_event(state, "Simulation paused."); st.rerun()
-        st.metric("Simulation Time", f"{state['simulation_time']:.1f}s")
-        if st.button("⚠️ Reset Simulation State", use_container_width=True, type="secondary"):
-            state = system_state.reset_state_file(); log_event(state, "--- SYSTEM STATE RESET ---"); st.rerun()
-
+def render_operations_page(state, planners):
+    """Renders the main simulation and operations view."""
     render_fleet_table(state)
     st.markdown("---")
     
@@ -198,8 +189,104 @@ def main():
         st.subheader("🌐 3D Operations Map")
         render_map(state, planners)
 
+def render_analytics_page(state):
+    """Renders the post-mission analytics dashboard."""
+    st.header("📊 Analytics Dashboard")
+    
+    log_data = state.get('completed_missions_log', [])
+    if not log_data:
+        st.info("No missions have been completed yet. Run the simulation to generate data.")
+        return
+
+    df = pd.DataFrame(log_data)
+    
+    # --- KPIs ---
+    st.subheader("Key Performance Indicators (KPIs)")
+    
+    # On-Time Rate
+    on_time_missions = (df['actual_duration_sec'] <= df['planned_duration_sec']).sum()
+    on_time_rate = (on_time_missions / len(df)) * 100 if len(df) > 0 else 0
+    
+    # Energy Accuracy
+    df_valid_energy = df[df['planned_energy_wh'] > 0]
+    energy_error_pct = (abs(df_valid_energy['actual_energy_wh'] - df_valid_energy['planned_energy_wh']) / df_valid_energy['planned_energy_wh']).mean() * 100
+    if pd.isna(energy_error_pct): energy_error_pct = 0.0
+
+    kpi1, kpi2, kpi3 = st.columns(3)
+    kpi1.metric("Total Missions Flown", len(df))
+    kpi2.metric("On-Time Delivery Rate", f"{on_time_rate:.1f}%")
+    kpi3.metric("Avg. Energy Prediction Error", f"{energy_error_pct:.1f}%", help="Lower is better. Average of |Actual - Planned| / Planned.")
+
+    st.markdown("---")
+
+    # --- Visualizations ---
+    st.subheader("Performance Visualizations")
+    
+    vis1, vis2 = st.columns(2)
+    with vis1:
+        # Energy Efficiency Chart
+        df['efficiency_wh_per_stop'] = df['actual_energy_wh'] / df['number_of_stops']
+        fig_eff = px.line(df, x='completion_timestamp', y='efficiency_wh_per_stop', title="Energy Efficiency Over Time", markers=True)
+        fig_eff.update_layout(xaxis_title="Simulation Time (s)", yaxis_title="Energy (Wh) per Stop")
+        st.plotly_chart(fig_eff, use_container_width=True)
+
+    with vis2:
+        # Missions per Drone
+        missions_per_drone = df['drone_id'].value_counts().reset_index()
+        missions_per_drone.columns = ['drone_id', 'count']
+        fig_drone = px.bar(missions_per_drone, x='drone_id', y='count', title="Missions Completed per Drone")
+        fig_drone.update_layout(xaxis_title="Drone ID", yaxis_title="Number of Missions")
+        st.plotly_chart(fig_drone, use_container_width=True)
+        
+    st.markdown("---")
+    
+    # --- MLOps Section ---
+    st.subheader("🧠 Model Management")
+    model_path = state.get('active_model_path', "N/A")
+    st.info(f"**Active Model:** `{os.path.basename(model_path)}`")
+    
+    if st.button("Retrain Prediction Model", use_container_width=True, help="Combines historical and new flight data to train an improved model."):
+        with st.spinner("Retraining in progress... This may take a moment."):
+            success, message = retrainer.retrain_model()
+        if success:
+            st.success(f"✅ Model retraining complete! {message}")
+            # Clear the resource cache to force reloading planners with the new model
+            st.cache_resource.clear()
+            st.info("Cleared application cache. The new model will be loaded on the next action.")
+            time.sleep(2) # Give user time to read the message
+            st.rerun()
+        else:
+            st.error(f"❌ Retraining failed: {message}")
+
+def main():
+    st.set_page_config(layout="wide", page_title="Drone Delivery Simulator")
+    st.title("🚁 Continuous Drone Delivery Simulator")
+    
+    state = system_state.load_state()
+    planners = load_global_planners()
+    if 'planning_future' not in st.session_state: st.session_state.planning_future = None
+    
+    with st.sidebar:
+        st.header("Master Control")
+        page = st.radio("Navigation", ["Operations", "Analytics Dashboard"])
+        st.markdown("---")
+        sim_running = state.get('simulation_running', False)
+        if st.button("▶️ Run", disabled=sim_running, use_container_width=True):
+            state['simulation_running'] = True; log_event(state, "Simulation started."); st.rerun()
+        if st.button("⏸️ Pause", disabled=not sim_running, use_container_width=True):
+            state['simulation_running'] = False; log_event(state, "Simulation paused."); st.rerun()
+        st.metric("Simulation Time", f"{state['simulation_time']:.1f}s")
+        if st.button("⚠️ Reset Simulation State", use_container_width=True, type="secondary"):
+            state = system_state.reset_state_file(); log_event(state, "--- SYSTEM STATE RESET ---"); st.rerun()
+
+    if page == "Operations":
+        render_operations_page(state, planners)
+    elif page == "Analytics Dashboard":
+        render_analytics_page(state)
+
     # --- Simulation Update & Persistence ---
     if state.get('simulation_running', False):
+        fleet_manager, dispatcher, executor = planners['fleet_manager'], planners['dispatcher'], planners['executor']
         # --- Asynchronous Fleet Planning Logic ---
         if st.session_state.planning_future and st.session_state.planning_future.done():
             try:

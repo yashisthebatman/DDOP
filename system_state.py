@@ -3,7 +3,7 @@
 import os
 import numpy as np
 from tinydb import TinyDB
-from config import HUBS, DESTINATIONS, DRONE_BATTERY_WH, DRONE_MAX_PAYLOAD_KG
+from config import HUBS, DESTINATIONS, DRONE_BATTERY_WH, DRONE_MAX_PAYLOAD_KG, MODEL_FILE_PATH
 
 # --- Constants ---
 DB_FILE = 'system_state.json'
@@ -17,6 +17,7 @@ def get_initial_state():
     """
     drones = {
         f"Drone {i+1}": {
+            'id': f"Drone {i+1}", # Add id for convenience
             'pos': HUBS[list(HUBS.keys())[i % len(HUBS)]],
             'home_hub': list(HUBS.keys())[i % len(HUBS)],
             'battery': DRONE_BATTERY_WH,
@@ -44,7 +45,9 @@ def get_initial_state():
         'completed_orders': [],
         'simulation_time': 0.0,
         'log': ["System initialized. Welcome to the Drone Delivery Simulator."],
-        'simulation_running': False
+        'simulation_running': False,
+        'completed_missions_log': [], # For analytics dashboard
+        'active_model_path': MODEL_FILE_PATH # For MLOps feedback loop
     }
 
 def load_state():
@@ -61,6 +64,10 @@ def load_state():
         for key in initial_state:
             if key not in state_doc:
                 state_doc[key] = initial_state[key]
+        # Add drone IDs if they are missing from older states
+        for drone_id, drone_data in state_doc['drones'].items():
+            if 'id' not in drone_data:
+                drone_data['id'] = drone_id
         return state_doc
     else:
         # The database is empty, so we create the first state document

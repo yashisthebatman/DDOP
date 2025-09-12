@@ -1,3 +1,5 @@
+# FILE: ml_predictor/predictor.py
+
 import numpy as np
 import os
 import joblib
@@ -50,27 +52,28 @@ class EnergyTimePredictor:
     def __init__(self):
         self.models = None
         self.fallback_predictor = PhysicsBasedPredictor()
-        
-        # FIX: Align feature names with the model's training columns based on the pytest warning.
         self.feature_names = [
             'distance_3d', 'altitude_change', 'horizontal_distance', 'payload_kg',
             'wind_speed', 'wind_alignment', 'turning_angle', 'p1_alt', 
             'p2_alt', 'abs_alt_change'
         ]
-        self.load_model()
+        # Model is no longer loaded on initialization
 
-    def load_model(self):
-        """Loads the model from the local joblib file."""
+    def load_model(self, model_path=None):
+        """Loads the model from the specified joblib file path."""
+        if model_path is None:
+            model_path = MODEL_FILE_PATH
+        
         try:
-            if os.path.exists(MODEL_FILE_PATH):
-                logging.info(f"Attempting to load ML model from '{MODEL_FILE_PATH}'...")
-                self.models = joblib.load(MODEL_FILE_PATH)
-                logging.info("✅ Successfully loaded local ML model.")
+            if os.path.exists(model_path):
+                logging.info(f"Attempting to load ML model from '{model_path}'...")
+                self.models = joblib.load(model_path)
+                logging.info(f"✅ Successfully loaded ML model: {os.path.basename(model_path)}")
             else:
-                logging.warning(f"⚠️ Model file not found at '{MODEL_FILE_PATH}'. Using physics-based fallback only.")
+                logging.warning(f"⚠️ Model file not found at '{model_path}'. Using physics-based fallback only.")
                 self.models = None
         except Exception as e:
-            logging.error(f"❌ Error loading local ML model: {e}. Using physics-based fallback.")
+            logging.error(f"❌ Error loading ML model from '{model_path}': {e}. Using physics-based fallback.")
             self.models = None
 
     def predict(self, p1, p2, payload_kg, wind_vector, p_prev=None):
@@ -103,8 +106,11 @@ class EnergyTimePredictor:
             if np.linalg.norm(v1) > 0 and np.linalg.norm(flight_vector) > 0:
                 turning_angle = np.degrees(calculate_vector_angle_3d(v1, flight_vector))
         
-        # The order here must exactly match self.feature_names
-        return [
-            distance_3d, altitude_change, horizontal_distance, payload_kg,
-            wind_speed, wind_alignment, turning_angle, p1[2], p2[2], abs(altitude_change)
-        ]
+        # This order must match self.feature_names and training data columns
+        return {
+            'distance_3d': distance_3d, 'altitude_change': altitude_change,
+            'horizontal_distance': horizontal_distance, 'payload_kg': payload_kg,
+            'wind_speed': wind_speed, 'wind_alignment': wind_alignment,
+            'turning_angle': turning_angle, 'p1_alt': p1[2], 'p2_alt': p2[2],
+            'abs_alt_change': abs(altitude_change)
+        }
