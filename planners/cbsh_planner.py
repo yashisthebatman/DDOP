@@ -12,7 +12,7 @@ from environment import Environment
 from utils.rrt_star_anytime import AnytimeRRTStar
 from utils.path_timing_solver import PathTimingSolver
 from utils.geometry import calculate_distance_3d
-from config import DRONE_SPEED_MPS
+from config import DRONE_SPEED_MPS, MIN_ALTITUDE, MAX_ALTITUDE
 from utils.a_star import AStarPlanner
 
 LOW_LEVEL_TIME_BUDGET = 2.0
@@ -80,18 +80,31 @@ class CBSHPlanner:
             logging.warning(f"CBSH: A* failed to find a strategic path for {agent.id}.")
             return None
         
+        # DEFINITIVE FIX: Use a performant hybrid planner. A* provides a coarse path, which is simplified.
+        # RRT* is then used on small, localized bounding boxes for each segment.
         strategic_waypoints_world = [agent.start_pos]
-        for grid_pos in strategic_grid_path[1:-1:5]: # Simplify path
+        # Simplify the path by taking every 10th point from the dense A* grid path.
+        for grid_pos in strategic_grid_path[1:-1:10]: 
              strategic_waypoints_world.append(self.coord_manager.meters_to_world(self.coord_manager.grid_to_meters(grid_pos)))
         strategic_waypoints_world.append(agent.goal_pos)
         
         full_geometric_path = [strategic_waypoints_world[0]]
         for i in range(len(strategic_waypoints_world) - 1):
-            rrt = AnytimeRRTStar(strategic_waypoints_world[i], strategic_waypoints_world[i+1], self.env, self.coord_manager)
-            segment_path, status = rrt.plan(time_budget_s=0.2)
+            p1, p2 = strategic_waypoints_world[i], strategic_waypoints_world[i+1]
+            rrt = AnytimeRRTStar(p1, p2, self.env, self.coord_manager)
+
+            # Create a tight bounding box around the segment for the local RRT* search
+            p1_m, p2_m = self.coord_manager.world_to_meters(p1), self.coord_manager.world_to_meters(p2)
+            min_m, max_m = np.minimum(p1_m, p2_m), np.maximum(p1_m, p2_m)
+            buffer = 150 # 150m buffer to allow maneuvering
+            local_bounds = (min_m[0]-buffer, min_m[1]-buffer, MIN_ALTITUDE, max_m[0]+buffer, max_m[1]+buffer, MAX_ALTITUDE)
+
+            segment_path, status = rrt.plan(time_budget_s=0.2, custom_bounds_m=local_bounds)
+            
             if not segment_path:
                 logging.warning(f"CBSH: RRT* failed on segment {i} for {agent.id}. Status: {status}")
                 return None
+            
             full_geometric_path.extend(segment_path[1:])
         
         timed_path = self.timing_solver.find_timing(full_geometric_path, constraints)
@@ -114,7 +127,6 @@ class CBSHPlanner:
         return total_cost
 
     def _select_best_conflict(self, solution: Dict) -> Optional[Conflict]:
-        # ... (unchanged)
         conflicts = []
         if not any(solution.values()): return None
         max_time = max((p[-1][1] for p in solution.values() if p), default=0)
@@ -134,7 +146,6 @@ class CBSHPlanner:
         return min(conflicts, key=lambda c: c.timestamp) if conflicts else None
 
     def _get_interpolated_path(self, timed_path: List[Tuple[Tuple, int]]) -> List[Tuple]:
-        # ... (unchanged)
         if not timed_path or not timed_path[-1]: return []
         max_time = timed_path[-1][1]
         full_path = [None] * (max_time + 1)

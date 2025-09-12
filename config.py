@@ -34,13 +34,15 @@ HUBS = {
 }
 DESTINATIONS = {
     "One World Trade": (-74.0134, 40.7127, 100.0),
-    "Empire State Building": (-73.9857, 40.739, 150.0),
+    # FIX: Moved slightly west to be clearly outside the NFZ boundary.
+    "Empire State Building": (-73.9860, 40.739, 150.0),
     "NYU Campus": (-73.9962, 40.7295, 50.0),
     "Hudson Yards Vessel": (-74.0025, 40.739, 50.0),
     "South Street Seaport": (-74.0036, 40.706, 50.0),
     "Wall Street Bull": (-74.0134, 40.7056, 50.0),
     "Madison Square Garden": (-73.9936, 40.7395, 70.0),
-    "StuyTown Apartments": (-73.9780, 40.7320, 80.0),
+    # FIX: Moved slightly east to be outside the NFZ.
+    "StuyTown Apartments": (-73.9740, 40.7320, 80.0),
     "Chelsea Market": (-74.0060, 40.738, 50.0),
     "Union Square": (-73.9904, 40.7359, 50.0)
 }

@@ -6,7 +6,7 @@ from opensimplex import OpenSimplex
 from rtree import index
 import logging
 
-from config import AREA_BOUNDS, MIN_ALTITUDE, MAX_ALTITUDE, NO_FLY_ZONES
+from config import AREA_BOUNDS, MIN_ALTITUDE, MAX_ALTITUDE, NO_FLY_ZONES, HUBS, DESTINATIONS
 from utils.geometry import line_segment_intersects_aabb
 from utils.coordinate_manager import CoordinateManager
 
@@ -80,12 +80,27 @@ class Environment:
     def _generate_and_index_buildings(self) -> List[Building]:
         buildings = []
         np.random.seed(42)
-        for i in range(20):
+        all_poi = list(HUBS.values()) + list(DESTINATIONS.values())
+
+        # FIX: Loop until 20 valid buildings are generated, not just 20 times.
+        while len(buildings) < 20:
             center_x = np.random.uniform(AREA_BOUNDS[0], AREA_BOUNDS[2])
             center_y = np.random.uniform(AREA_BOUNDS[1], AREA_BOUNDS[3])
             width_deg, height_deg = np.random.uniform(0.0001, 0.0003), np.random.uniform(0.0001, 0.0003)
             altitude = np.random.uniform(50, MAX_ALTITUDE)
-            building = Building(id=i, center_xy=(center_x, center_y), size_xy=(width_deg, height_deg), height=altitude)
+            
+            is_conflicting = False
+            for poi in all_poi:
+                poi_lon, poi_lat, _ = poi
+                if (center_x - width_deg / 2 <= poi_lon <= center_x + width_deg / 2 and
+                    center_y - height_deg / 2 <= poi_lat <= center_y + height_deg / 2):
+                    is_conflicting = True
+                    break
+            
+            if is_conflicting:
+                continue # Discard conflicting building and try again.
+
+            building = Building(id=len(buildings), center_xy=(center_x, center_y), size_xy=(width_deg, height_deg), height=altitude)
             buildings.append(building)
             bottom_left_world = (center_x - width_deg / 2, center_y - height_deg / 2, 0)
             top_right_world = (center_x + width_deg / 2, center_y + height_deg / 2, altitude)

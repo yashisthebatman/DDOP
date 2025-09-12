@@ -38,23 +38,10 @@ class AnytimeRRTStar:
         self.start_node = Node(self.start_pos_m)
         self.goal_node = Node(self.goal_pos_m)
         self.nodes = [self.start_node]
-        self._create_sampling_bounds(start_world, goal_world)
+        # Bounding box is now set dynamically in the plan method
+        self.sampling_bounds_m = None
 
-    def _create_sampling_bounds(self, start_world, goal_world):
-        """Creates a focused sampling area in world coords for efficiency."""
-        # This logic remains in world coords as it's for generating random samples
-        center_lon = (start_world[0] + goal_world[0]) / 2
-        center_lat = (start_world[1] + goal_world[1]) / 2
-        path_dist_lon = abs(start_world[0] - goal_world[0])
-        path_dist_lat = abs(start_world[1] - goal_world[1])
-        buffer_lon = max(0.01, path_dist_lon * 0.5)
-        buffer_lat = max(0.01, path_dist_lat * 0.5)
-        self.sample_lon_min = center_lon - (path_dist_lon/2 + buffer_lon)
-        self.sample_lon_max = center_lon + (path_dist_lon/2 + buffer_lon)
-        self.sample_lat_min = center_lat - (path_dist_lat/2 + buffer_lat)
-        self.sample_lat_max = center_lat + (path_dist_lat/2 + buffer_lat)
-
-    def plan(self, time_budget_s: float) -> Tuple[Optional[List[Tuple]], str]:
+    def plan(self, time_budget_s: float, custom_bounds_m: Optional[Tuple] = None) -> Tuple[Optional[List[Tuple]], str]:
         """
         Plans a path, returning the best one found within the time budget.
         The returned path is in WORLD coordinates.
@@ -63,12 +50,21 @@ class AnytimeRRTStar:
         best_path_m = None
         best_cost = float('inf')
         
+        # DEFINITIVE FIX: Set the sampling bounds for this specific planning request.
+        if custom_bounds_m:
+            self.sampling_bounds_m = custom_bounds_m
+        else:
+            # Fallback to a large box if no custom one is provided
+            min_m = np.minimum(self.start_pos_m, self.goal_pos_m)
+            max_m = np.maximum(self.start_pos_m, self.goal_pos_m)
+            buffer = 200 # 200 meters buffer
+            self.sampling_bounds_m = (min_m[0]-buffer, min_m[1]-buffer, MIN_ALTITUDE, max_m[0]+buffer, max_m[1]+buffer, MAX_ALTITUDE)
+
         while time.time() - start_time < time_budget_s:
             sample_m = self._get_random_sample_m()
             nearest_node = self._get_nearest_node(sample_m)
             new_node_pos_m = self._steer(nearest_node.position_m, sample_m)
             
-            # The collision check must convert back to world coords for the environment API
             from_pos_world = self.coord_manager.meters_to_world(nearest_node.position_m)
             to_pos_world = self.coord_manager.meters_to_world(new_node_pos_m)
 
@@ -80,7 +76,6 @@ class AnytimeRRTStar:
                 self.nodes.append(new_node)
                 self._rewire_tree(new_node, near_nodes)
 
-                # Check if this new node can connect to the goal
                 new_node_world = self.coord_manager.meters_to_world(new_node.position_m)
                 goal_world = self.coord_manager.meters_to_world(self.goal_pos_m)
                 if not self.env.is_line_obstructed(new_node_world, goal_world):
@@ -91,23 +86,23 @@ class AnytimeRRTStar:
                         best_path_m = self._reconstruct_path(self.goal_node)
 
         if best_path_m:
-            # Convert final path from meters back to world coordinates
             best_path_world = [self.coord_manager.meters_to_world(p) for p in best_path_m]
             return best_path_world, f"Path found successfully (cost: {best_cost:.2f})."
         return None, "No strategic path found within time budget."
 
     def _get_random_sample_m(self) -> Tuple:
         if random.random() < RRT_GOAL_BIAS: return self.goal_pos_m
-        lon = random.uniform(self.sample_lon_min, self.sample_lon_max)
-        lat = random.uniform(self.sample_lat_min, self.sample_lat_max)
-        alt = random.uniform(MIN_ALTITUDE, MAX_ALTITUDE)
-        return self.coord_manager.world_to_meters((lon, lat, alt))
+        
+        min_x, min_y, min_z, max_x, max_y, max_z = self.sampling_bounds_m
+        x = random.uniform(min_x, max_x)
+        y = random.uniform(min_y, max_y)
+        z = random.uniform(min_z, max_z)
+        return (x,y,z)
 
     def _get_nearest_node(self, sample_m: Tuple) -> Node:
         return min(self.nodes, key=lambda n: calculate_distance_3d(n.position_m, sample_m))
 
     def _steer(self, from_pos_m: Tuple, to_pos_m: Tuple) -> Tuple:
-        """Steers from a node towards a sample in METER-SPACE."""
         from_arr, to_arr = np.array(from_pos_m), np.array(to_pos_m)
         direction = to_arr - from_arr
         dist = np.linalg.norm(direction)
@@ -142,7 +137,6 @@ class AnytimeRRTStar:
                     r_node.parent, r_node.cost = new_node, new_node.cost + dist
 
     def _reconstruct_path(self, goal_node: Node) -> List[Tuple]:
-        """Reconstructs the path in METER-SPACE."""
         path = []
         current = goal_node
         while current.parent is not None:

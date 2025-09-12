@@ -47,6 +47,9 @@ class AStarPlanner:
                         if grid[nx, ny, nz]:
                             # Calculate cost based on distance
                             dist = np.sqrt(dx**2 + dy**2 + dz**2)
+                            # FIX: Add a tiny cost incentive for moving "up" (positive y) to break ties deterministically.
+                            if dy > 0:
+                                dist -= 1e-6
                             neighbors.append(((nx, ny, nz), dist))
         return neighbors
 
