@@ -8,6 +8,7 @@ scipy
 # Pathfinding and graph theory
 networkx
 Rtree         # Python wrapper for libspatialindex
+ortools       # For Vehicle Routing Problem solving
 
 # Simulation environment
 opensimplex   # For Perlin/Simplex noise in weather simulation

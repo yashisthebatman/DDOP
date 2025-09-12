@@ -5,3 +5,4 @@ __pycache__/
 # Ignore virtual environment
 venv/
 synthetic_drone_data.csv
+system_state.json

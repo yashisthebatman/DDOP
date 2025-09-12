@@ -17,6 +17,9 @@ from utils.coordinate_manager import CoordinateManager
 from planners.cbsh_planner import CBSHPlanner
 from fleet.manager import FleetManager, Mission
 from fleet.cbs_components import Agent
+# NEW IMPORTS
+from dispatch.vrp_solver import VRPSolver
+from dispatch.dispatcher import Dispatcher
 
 # --- Helper & UI Functions ---
 
@@ -36,12 +39,16 @@ def load_global_planners():
     predictor = EnergyTimePredictor()
     cbsh_planner = CBSHPlanner(env, coord_manager)
     fleet_manager = FleetManager(cbsh_planner, predictor)
-    log_event(system_state.load_state(), "✅ Planners ready.")
+    # NEW: Initialize dispatcher components
+    vrp_solver = VRPSolver(predictor)
+    dispatcher = Dispatcher(vrp_solver)
+    log_event(system_state.load_state(), "✅ Planners and Dispatcher ready.")
     return {
         "env": env,
         "predictor": predictor,
         "coord_manager": coord_manager,
         "fleet_manager": fleet_manager,
+        "dispatcher": dispatcher # NEW
     }
 
 def render_fleet_table(state):
@@ -96,7 +103,7 @@ def render_fleet_table(state):
         row_cols[4].write(row['Payload (kg)'])
         row_cols[5].code(row['Mission ID'])
 
-def update_simulation(state):
+def update_simulation(state, fleet_manager):
     """Advances the simulation by one time step and updates drone/mission states."""
     state['simulation_time'] += SIMULATION_TIME_STEP
 
@@ -151,6 +158,11 @@ def update_simulation(state):
         for order_id in mission['order_ids']: state['completed_orders'].append(order_id)
         del state['active_missions'][mission_id]
 
+    # NEW: Find and plan missions for drones in 'PLANNING' state
+    success, result = fleet_manager.plan_pending_missions(state)
+    if not success:
+        log_event(state, f"❌ Fleet planning cycle failed: {result.get('error', 'Unknown error')}")
+
 def render_map(state, planners):
     """Renders the 3D Plotly map of the simulation area."""
     fig = go.Figure()
@@ -195,6 +207,7 @@ def main():
     state = system_state.load_state()
     planners = load_global_planners()
     fleet_manager = planners['fleet_manager']
+    dispatcher = planners['dispatcher']
 
     # --- Sidebar for Controls ---
     with st.sidebar:
@@ -224,52 +237,34 @@ def main():
     
     col1, col2 = st.columns([1, 2])
     with col1:
+        # --- NEW: UI for adding orders ---
+        st.subheader("📦 Add New Delivery Order")
+        with st.form("new_order_form", clear_on_submit=True):
+            dest_name = st.selectbox("Destination", list(DESTINATIONS.keys()))
+            payload = st.slider("Payload (kg)", 0.1, DRONE_MAX_PAYLOAD_KG, 1.0, 0.1)
+            
+            submitted = st.form_submit_button("Add to Delivery Queue", type="primary", use_container_width=True)
+            if submitted:
+                order_id = f"{dest_name.replace(' ', '')}-{uuid.uuid4().hex[:4]}"
+                if order_id in state['pending_orders']:
+                    st.error("An order for this destination already exists.")
+                else:
+                    state['pending_orders'][order_id] = {
+                        'id': order_id,
+                        'pos': DESTINATIONS[dest_name],
+                        'payload_kg': payload
+                    }
+                    log_event(state, f"📥 New order added: {order_id} ({payload}kg).")
+                    st.rerun()
+
         st.subheader("📦 Pending Delivery Orders")
-        
-        pending_orders_list = list(state['pending_orders'].keys())
+        pending_orders_list = list(state['pending_orders'].values())
         if not pending_orders_list:
             st.info("No pending orders.")
         else:
-            selected_orders = st.multiselect("Select orders to assign:", pending_orders_list, default=pending_orders_list[:1])
-            
-            idle_drones = {drone_id: drone for drone_id, drone in state['drones'].items() if drone['status'] == 'IDLE'}
-            if not idle_drones:
-                st.warning("No drones are currently idle.")
-            else:
-                selected_drone = st.selectbox("Select an available drone:", list(idle_drones.keys()))
-
-                if st.button("🚀 Assign & Plan Mission", type="primary", use_container_width=True, disabled=not selected_orders or not selected_drone):
-                    drone = state['drones'][selected_drone]
-                    drone['status'] = 'PLANNING'
-                    
-                    orders_to_assign = {name: state['pending_orders'][name] for name in selected_orders}
-                    destinations = [order['pos'] for order in orders_to_assign.values()]
-                    total_payload = sum(order['payload_kg'] for order in orders_to_assign.values())
-                    
-                    mission_id = f"M-{uuid.uuid4().hex[:6]}"
-                    mission_obj = Mission(mission_id, selected_drone, drone['pos'], destinations, total_payload, {})
-                    
-                    success, results = fleet_manager.execute_planning_cycle([mission_obj])
-
-                    if success and selected_drone in results['planned_missions']:
-                        plan = results['planned_missions'][selected_drone]
-                        state['active_missions'][mission_id] = {
-                            'drone_id': selected_drone,
-                            'order_ids': selected_orders,
-                            'start_time': state['simulation_time'],
-                            'start_battery': drone['battery'],
-                            'payload_kg': total_payload,
-                            **plan # Adds path, coords, energy, time
-                        }
-                        drone['mission_id'] = mission_id
-                        drone['status'] = 'EN ROUTE'
-                        for order_id in selected_orders:
-                            del state['pending_orders'][order_id]
-                        log_event(state, f"✅ Plan successful for {selected_drone} (Mission {mission_id}). En route!")
-                    else:
-                        log_event(state, f"❌ Planning failed for {selected_drone}. Check console for details.")
-                        drone['status'] = 'IDLE'
-                    st.rerun()
+            # Display pending orders as a simple list
+            df_pending = pd.DataFrame(pending_orders_list)
+            st.dataframe(df_pending[['id', 'payload_kg']], use_container_width=True, hide_index=True)
 
         st.subheader("📋 Event Log")
         st.dataframe(pd.DataFrame(state['log'], columns=["Log Entry"]), height=300, use_container_width=True)
@@ -280,7 +275,12 @@ def main():
 
     # --- Simulation Update & Persistence ---
     if state.get('simulation_running', False):
-        update_simulation(state)
+        # NEW: Run dispatcher before updating simulation
+        dispatched = dispatcher.dispatch_missions(state)
+        if dispatched:
+            log_event(state, "🚚 Dispatcher created new missions.")
+
+        update_simulation(state, fleet_manager)
 
     system_state.save_state(state)
     
