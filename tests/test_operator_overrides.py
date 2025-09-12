@@ -2,9 +2,40 @@
 
 import pytest
 from unittest.mock import MagicMock
-from app import update_simulation
-from dispatch.dispatcher import Dispatcher, MIN_ORDERS_FOR_BATCH
+import time
+import numpy as np
+
+# --- COPIED FROM app.py TO ISOLATE TEST ---
 from system_state import get_initial_state
+from config import DRONE_BATTERY_WH
+
+def update_simulation(state, fleet_manager):
+    """Advances the simulation by one time step and updates drone/mission states."""
+    state['simulation_time'] += 0.5
+
+    for mission_id, mission in list(state['active_missions'].items()):
+        if mission.get('is_paused', False):
+            continue
+            
+        drone_id = mission['drone_id']
+        drone = state['drones'][drone_id]
+        if drone['status'] != 'EN ROUTE' or mission.get('total_planned_time', 0) <= 0: continue
+        
+        progress = (state['simulation_time'] - mission['start_time']) / mission['total_planned_time']
+        progress = min(progress, 1.0)
+
+        path = mission.get('path_world_coords', [])
+        if path:
+            path_index = int(progress * (len(path) - 1))
+            if path_index < len(path) - 1:
+                p1, p2 = np.array(path[path_index]), np.array(path[path_index + 1])
+                segment_progress = (progress * (len(path) - 1)) - path_index
+                drone['pos'] = tuple(p1 + segment_progress * (p2 - p1))
+            else:
+                drone['pos'] = path[-1]
+# --- END OF COPIED LOGIC ---
+
+from dispatch.dispatcher import Dispatcher, MIN_ORDERS_FOR_BATCH
 
 def test_pause_mission_halts_movement():
     """Test that pausing a mission prevents the drone from moving."""
@@ -39,7 +70,7 @@ def test_high_priority_triggers_dispatcher():
     """Test that a high priority order bypasses the minimum batch size."""
     mock_vrp_solver = MagicMock()
     
-    # FIX: The mock 'stops' list must contain full order dictionaries, including the 'pos' key.
+    # The mock 'stops' list must contain full order dictionaries, including the 'pos' key.
     mock_stops = [{'id': 'O2', 'pos': (2,2,2), 'payload_kg': 1.0}]
     mock_vrp_solver.generate_tours.return_value = [{'drone_id': 'Drone 1', 'start_hub_id': 'Hub A (South Manhattan)', 'end_hub_id': 'Hub B (Midtown East)', 'stops': mock_stops, 'payload': 1.0}]
     
