@@ -5,42 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Drone Delivery Operations</title>
     <link rel="stylesheet" href="style.css">
-    <!-- Include CesiumJS -->
-    <script src="https://cesium.com/downloads/cesiumjs/releases/1.117/Build/Cesium/Cesium.js"></script>
-    <link href="https://cesium.com/downloads/cesiumjs/releases/1.117/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js" charset="utf-8"></script>
 </head>
 <body>
-    <div id="cesiumContainer"></div>
+    <div id="plotContainer"></div>
 
-    <div id="controlPanel">
+    <!-- Main Control Panel on the Left -->
+    <div id="leftPanel">
         <div class="header">
-            <h1>Drone Operations</h1>
+            <h1>Fleet & Mission Control</h1>
             <div id="simTime">Sim Time: 0.0s</div>
         </div>
-
-        <div class="metrics">
-            <div class="metric-item">
-                <span class="label">Idle</span>
-                <span id="dronesIdle" class="value">0</span>
-            </div>
-            <div class="metric-item">
-                <span class="label">Active</span>
-                <span id="dronesActive" class="value">0</span>
-            </div>
-            <div class="metric-item">
-                <span class="label">Pending</span>
-                <span id="ordersPending" class="value">0</span>
-            </div>
-            <div class="metric-item">
-                <span class="label">Completed</span>
-                <span id="ordersCompleted" class="value">0</span>
-            </div>
-        </div>
-
         <div class="controls">
             <button id="runPauseButton" class="run">▶ Run</button>
             <button id="dispatchButton">🚚 Dispatch</button>
             <button id="resetButton" class="danger">⚠️ Reset</button>
+        </div>
+        <div class="metrics">
+            <div class="metric-item"><span class="label">Idle</span><span id="dronesIdle" class="value">0</span></div>
+            <div class="metric-item"><span class="label">Active</span><span id="dronesActive" class="value">0</span></div>
+            <div class="metric-item"><span class="label">Pending Orders</span><span id="ordersPending" class="value">0</span></div>
+            <div class="metric-item"><span class="label">Completed Orders</span><span id="ordersCompleted" class="value">0</span></div>
         </div>
 
         <div class="content-section">
@@ -53,28 +38,33 @@
             </form>
         </div>
 
+        <!-- FIX: Added Drone Status List -->
+        <div class="content-section drone-status-section">
+            <h2>Drone Status</h2>
+            <div class="table-container" id="droneStatusContainer">
+                <!-- Drone status will be populated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Log and Order Panel on the Right -->
+    <div id="rightPanel">
+        <!-- FIX: Added Pending Orders Table -->
         <div class="content-section">
             <h2>Pending Orders</h2>
             <div class="table-container">
                 <table id="pendingOrdersTable">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Destination</th>
-                            <th>ETA (s)</th>
-                            <th>Priority</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <!-- Rows will be added by JavaScript -->
-                    </tbody>
+                    <thead><tr><th>ID</th><th>Destination</th><th>Payload</th><th>Priority</th></tr></thead>
+                    <tbody><!-- Populated by JS --></tbody>
                 </table>
             </div>
         </div>
-
-         <div class="content-section">
-            <h2>System Log</h2>
-            <div id="logContainer"></div>
+        <!-- FIX: Renamed to Mission Log -->
+        <div class="content-section log-section">
+            <h2>Mission Log</h2>
+            <div id="logContainer">
+                <!-- Log entries will be populated by JS -->
+            </div>
         </div>
     </div>
 

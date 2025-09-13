@@ -2,6 +2,7 @@
 import pytest
 import numpy as np
 import time
+from unittest.mock import MagicMock
 
 # --- Import all the real components we need for a full-stack test ---
 from system_state import get_initial_state
@@ -12,7 +13,7 @@ from planners.cbsh_planner import CBSHPlanner, MIN_SEPARATION_METERS
 from fleet.manager import FleetManager
 from fleet.cbs_components import Agent
 from config import NO_FLY_ZONES, HUBS, DESTINATIONS
-from app import update_simulation
+from server import update_simulation # <--- FIX: Changed 'app' to 'server'
 import simulation.contingency_planner as contingency_planner
 
 
@@ -27,10 +28,10 @@ def real_coord_manager():
 def real_environment(real_coord_manager):
     """
     Provides a real Environment but with NO random buildings to ensure predictable
-    test paths, addressing the flakiness issue identified by Grok's analysis.
+    test paths.
     """
     env = Environment(WeatherSystem(seed=42), real_coord_manager)
-    # FIX: Clear buildings to ensure straight paths for conflict/NFZ tests.
+    # Clear buildings to ensure straight paths for conflict/NFZ tests.
     env.buildings = []
     env.obstacles = {}
     
@@ -105,7 +106,7 @@ def test_system_handles_unplannable_mission_gracefully(real_fleet_manager):
     state['drones']['Drone 1']['mission_id'] = 'M-IMPOSSIBLE'
     state['active_missions']['M-IMPOSSIBLE'] = {
         'drone_id': 'Drone 1', 'start_pos': HUBS["Hub A (South Manhattan)"],
-        'destinations': [obstructed_goal], 'payload_kg': 1.0
+        'destinations': [obstructed_goal], 'payload_kg': 1.0, 'stops': [], 'order_ids': []
     }
 
     # ACTION: Attempt to plan the impossible mission.

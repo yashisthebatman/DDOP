@@ -5,36 +5,10 @@ from unittest.mock import MagicMock
 import time
 import numpy as np
 
-# --- COPIED FROM app.py TO ISOLATE TEST ---
+# FIX: Import the REAL simulation logic, not a local copy.
+from server import update_simulation
 from system_state import get_initial_state
 from config import DRONE_BATTERY_WH
-
-def update_simulation(state, fleet_manager):
-    """Advances the simulation by one time step and updates drone/mission states."""
-    state['simulation_time'] += 0.5
-
-    for mission_id, mission in list(state['active_missions'].items()):
-        if mission.get('is_paused', False):
-            continue
-            
-        drone_id = mission['drone_id']
-        drone = state['drones'][drone_id]
-        if drone['status'] != 'EN ROUTE' or mission.get('total_planned_time', 0) <= 0: continue
-        
-        progress = (state['simulation_time'] - mission['start_time']) / mission['total_planned_time']
-        progress = min(progress, 1.0)
-
-        path = mission.get('path_world_coords', [])
-        if path:
-            path_index = int(progress * (len(path) - 1))
-            if path_index < len(path) - 1:
-                p1, p2 = np.array(path[path_index]), np.array(path[path_index + 1])
-                segment_progress = (progress * (len(path) - 1)) - path_index
-                drone['pos'] = tuple(p1 + segment_progress * (p2 - p1))
-            else:
-                drone['pos'] = path[-1]
-# --- END OF COPIED LOGIC ---
-
 from dispatch.dispatcher import Dispatcher, MIN_ORDERS_FOR_BATCH
 
 def test_pause_mission_halts_movement():
@@ -52,26 +26,27 @@ def test_pause_mission_halts_movement():
         'drone_id': drone_id, 'start_time': 0.0, 'total_planned_time': 100.0,
         'path_world_coords': [(10, 10, 50), (100, 100, 50)],
         'is_paused': True,  # Mission is paused
-        'start_battery': 200,
-        'total_planned_energy': 30
+        'start_battery': 200, 'total_planned_energy': 30, 'stops': [],
+        'mission_time_elapsed': 0.0, 'flight_time_elapsed': 0.0, 'total_maneuver_time': 0,
+        'order_ids': []
     }
     
     initial_pos = drone['pos']
-    update_simulation(state, None) # Run one tick
+    mock_planners = {"coord_manager": MagicMock()}
+    update_simulation(state, mock_planners) # Run one tick
     
     assert drone['pos'] == initial_pos # Position should not change
 
     # Now resume and check again
     state['active_missions']['M-123']['is_paused'] = False
-    update_simulation(state, None)
+    update_simulation(state, mock_planners)
     assert drone['pos'] != initial_pos # Position should now change
 
 def test_high_priority_triggers_dispatcher():
     """Test that a high priority order bypasses the minimum batch size."""
     mock_vrp_solver = MagicMock()
     
-    # The mock 'stops' list must contain full order dictionaries, including the 'pos' key.
-    mock_stops = [{'id': 'O2', 'pos': (2,2,2), 'payload_kg': 1.0}]
+    mock_stops = [{'id': 'O2', 'pos': (2,2,2), 'payload_kg': 1.0, 'dest_name': 'Test'}]
     mock_vrp_solver.generate_tours.return_value = [{'drone_id': 'Drone 1', 'start_hub_id': 'Hub A (South Manhattan)', 'end_hub_id': 'Hub B (Midtown East)', 'stops': mock_stops, 'payload': 1.0}]
     
     dispatcher = Dispatcher(mock_vrp_solver)
@@ -81,14 +56,14 @@ def test_high_priority_triggers_dispatcher():
     state['drones']['Drone 1']['status'] = 'IDLE'
 
     # Condition: 1 order, less than MIN_ORDERS_FOR_BATCH
-    state['pending_orders'] = {'O1': {'id': 'O1', 'pos': (1,1,1), 'payload_kg': 1, 'high_priority': False}}
+    state['pending_orders'] = {'O1': {'id': 'O1', 'pos': (1,1,1), 'payload_kg': 1, 'high_priority': False, 'dest_name': 'Test'}}
     
     dispatched = dispatcher.dispatch_missions(state)
     assert not dispatched
     mock_vrp_solver.generate_tours.assert_not_called()
     
     # Add a high priority order
-    state['pending_orders']['O2'] = {'id': 'O2', 'pos': (2,2,2), 'payload_kg': 1, 'high_priority': True}
+    state['pending_orders']['O2'] = {'id': 'O2', 'pos': (2,2,2), 'payload_kg': 1, 'high_priority': True, 'dest_name': 'Test'}
     
     dispatched = dispatcher.dispatch_missions(state)
 

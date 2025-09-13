@@ -9,38 +9,8 @@ from system_state import get_initial_state
 from config import DELIVERY_MANEUVER_TIME_SEC, SIMULATION_TIME_STEP
 from utils.geometry import calculate_distance_3d
 from utils.coordinate_manager import CoordinateManager
-
-# --- A simplified, local version of the app's update_simulation function ---
-def simplified_update_simulation(state, coord_manager):
-    """A focused version of update_simulation for testing delivery maneuvers."""
-    state['simulation_time'] += SIMULATION_TIME_STEP
-
-    for mission_id, mission in list(state['active_missions'].items()):
-        drone_id = mission['drone_id']
-        drone = state['drones'][drone_id]
-
-        if drone['status'] == 'PERFORMING_DELIVERY':
-            if state['simulation_time'] >= drone.get('maneuver_complete_at', float('inf')):
-                mission['current_stop_index'] += 1
-                drone['status'] = 'EN ROUTE'
-                drone.pop('maneuver_complete_at', None)
-            else:
-                continue
-
-        if drone['status'] == 'EN ROUTE':
-            num_stops = len(mission.get('stops', []))
-            stop_idx = mission.get('current_stop_index', 0)
-            if stop_idx < num_stops:
-                target_pos = mission['stops'][stop_idx]['pos']
-                dist_m = calculate_distance_3d(
-                    coord_manager.world_to_meters(drone['pos']),
-                    coord_manager.world_to_meters(target_pos)
-                )
-                if dist_m < 5.0:
-                    drone['status'] = 'PERFORMING_DELIVERY'
-                    drone['maneuver_complete_at'] = state['simulation_time'] + DELIVERY_MANEUVER_TIME_SEC
-                    drone['pos'] = target_pos
-                    continue
+# FIX: Import the real update function
+from server import update_simulation
 
 @pytest.fixture
 def test_state():
@@ -52,51 +22,58 @@ def test_state():
 
     state['drones'][drone_id]['status'] = 'EN ROUTE'
     state['drones'][drone_id]['mission_id'] = mission_id
+    state['drones'][drone_id]['pos'] = (-74.0, 40.7, 150.0) # Start high above
     state['active_missions'][mission_id] = {
-        'drone_id': drone_id,
-        'stops': [{'id': 'Order1', 'pos': destination}],
-        'current_stop_index': 0,
-        'mission_time_elapsed': 0.0
+        'mission_id': mission_id, 'drone_id': drone_id, 'order_ids': ['Order1'],
+        'stops': [{'id': 'Order1', 'pos': destination}], 'current_stop_index': 0,
+        'mission_time_elapsed': 0.0, 'flight_time_elapsed': 0.0, 'total_maneuver_time': 0,
+        'start_battery': 200, 'total_planned_energy': 20, 'total_planned_time': 1000
     }
     return state
 
-def test_drone_enters_delivery_state_on_arrival(test_state):
-    """Manually place a drone at its destination and assert its status changes."""
+@pytest.fixture
+def mock_planners():
+    """Provides a mock planners dict needed by update_simulation."""
+    coord_manager = CoordinateManager()
+    return {"coord_manager": coord_manager}
+
+def test_drone_enters_delivery_state_on_arrival(test_state, mock_planners):
+    """Manually place a drone near its destination and assert its status changes."""
     state = test_state
     drone_id = "Drone 1"
     destination = state['active_missions']['M-TEST']['stops'][0]['pos']
-    coord_manager = CoordinateManager()
     
-    # Place drone exactly at the destination
-    state['drones'][drone_id]['pos'] = destination
+    # Place drone very close to the destination to trigger arrival
+    state['drones'][drone_id]['pos'] = (destination[0], destination[1], destination[2] + 2.0)
     
-    simplified_update_simulation(state, coord_manager)
+    update_simulation(state, mock_planners)
     
     drone = state['drones'][drone_id]
     assert drone['status'] == 'PERFORMING_DELIVERY'
     assert 'maneuver_complete_at' in drone
     assert drone['maneuver_complete_at'] == pytest.approx(state['simulation_time'] + DELIVERY_MANEUVER_TIME_SEC)
+    assert drone['maneuver_target_pos'] == destination
 
-def test_delivery_maneuver_has_correct_duration(test_state):
+def test_delivery_maneuver_has_correct_duration(test_state, mock_planners):
     """Test that the drone remains in the delivery state for the correct duration."""
     state = test_state
     drone_id = "Drone 1"
-    coord_manager = CoordinateManager()
     
     # Manually put the drone into the delivery state
     state['drones'][drone_id]['status'] = 'PERFORMING_DELIVERY'
     state['drones'][drone_id]['maneuver_complete_at'] = state['simulation_time'] + DELIVERY_MANEUVER_TIME_SEC
     
     # Run simulation for less than the maneuver time
-    for _ in range(5): # 5 * 0.5s = 2.5s
-        simplified_update_simulation(state, coord_manager)
+    # 5 * 0.5s = 2.5s
+    for _ in range(int((DELIVERY_MANEUVER_TIME_SEC - 5) / SIMULATION_TIME_STEP)): 
+        update_simulation(state, mock_planners)
         
     drone = state['drones'][drone_id]
     assert drone['status'] == 'PERFORMING_DELIVERY'
     
-    # Run simulation for more than the maneuver time
-    state['simulation_time'] = DELIVERY_MANEUVER_TIME_SEC + 1
-    simplified_update_simulation(state, coord_manager)
+    # Run simulation past the completion time
+    state['simulation_time'] = DELIVERY_MANEUVER_TIME_SEC + 1.0
+    update_simulation(state, mock_planners)
     
     drone = state['drones'][drone_id]
     mission = state['active_missions']['M-TEST']

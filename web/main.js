@@ -1,19 +1,20 @@
 // FILE: web/main.js
 
-// --- Global State ---
-let viewer;
-let DESTINATIONS_LIST = {}; // Will be populated from config
-const droneEntities = new Map();
+let plotInitialized = false;
 
-// --- WebSocket Communication ---
 const socket = new WebSocket(`ws://${window.location.host}/ws`);
 
 socket.onopen = () => console.log("WebSocket connection established.");
 socket.onclose = () => console.log("WebSocket connection closed.");
 socket.onerror = (error) => console.error("WebSocket Error:", error);
 socket.onmessage = (event) => {
-    const state = JSON.parse(event.data);
-    updateUI(state);
+    const message = JSON.parse(event.data);
+    if (!plotInitialized) {
+        initPlot(message.plotly_data);
+        plotInitialized = true;
+    }
+    updateUI(message);
+    updatePlot(message.plotly_data);
 };
 
 function sendCommand(type, payload = {}) {
@@ -22,132 +23,80 @@ function sendCommand(type, payload = {}) {
     }
 }
 
-// --- CesiumJS 3D Map Initialization ---
-function initCesium(token) {
-    Cesium.Ion.defaultAccessToken = token;
-    viewer = new Cesium.Viewer('cesiumContainer', {
-        timeline: false,
-        animation: false,
-        geocoder: false,
-        homeButton: false,
-        sceneModePicker: false,
-        baseLayerPicker: false,
-        navigationHelpButton: false,
-        infoBox: false,
-        selectionIndicator: false,
-        fullscreenButton: false,
-        requestRenderMode: true,
-        maximumRenderTimeChange: Infinity,
-    });
-
-    const osmBuildings = Cesium.createOsmBuildings();
-    viewer.scene.primitives.add(osmBuildings);
-
-    viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(-73.9854, 40.7484, 3000),
-        orientation: {
-            heading: Cesium.Math.toRadians(0.0),
-            pitch: Cesium.Math.toRadians(-45.0),
+function initPlot(data) {
+    const layout = {
+        title: 'Fleet Simulation', showlegend: false, autosize: true,
+        paper_bgcolor: 'black', plot_bgcolor: 'black', // FIX: Black background
+        font: { color: '#e0e0e0' }, margin: { l: 0, r: 0, b: 0, t: 40 },
+        scene: {
+            xaxis: { title: 'X (meters)', color: '#777', backgroundcolor: 'black', gridcolor: '#444', zerolinecolor: '#444' },
+            yaxis: { title: 'Y (meters)', color: '#777', backgroundcolor: 'black', gridcolor: '#444', zerolinecolor: '#444' },
+            zaxis: { title: 'Altitude (m)', color: '#777', backgroundcolor: 'black', gridcolor: '#444', zerolinecolor: '#444' },
+            camera: { eye: { x: -1.5, y: -1.5, z: 1.0 } }
         }
-    });
+    };
+    Plotly.newPlot('plotContainer', data, layout, { responsive: true, displaylogo: false });
 }
 
-// --- UI Update Functions ---
-function updateUI(state) {
+function updatePlot(data) {
+    Plotly.react('plotContainer', data);
+}
+
+function updateUI(message) {
+    const state = message.simulation_state;
     document.getElementById('simTime').textContent = `Sim Time: ${state.simulation_time.toFixed(1)}s`;
-    const drones = Object.values(state.drones);
+    
+    const drones = message.drone_list || [];
     document.getElementById('dronesIdle').textContent = drones.filter(d => d.status === 'IDLE').length;
-    document.getElementById('dronesActive').textContent = drones.filter(d => d.status !== 'IDLE' && d.status !== 'RECHARGING').length;
-    document.getElementById('ordersPending').textContent = Object.keys(state.pending_orders).length;
+    document.getElementById('dronesActive').textContent = drones.filter(d => ['EN ROUTE', 'AVOIDING', 'EMERGENCY_RETURN', 'PERFORMING_DELIVERY'].includes(d.status)).length;
+    document.getElementById('ordersPending').textContent = (message.pending_orders_list || []).length;
     document.getElementById('ordersCompleted').textContent = state.completed_orders.length;
 
     const runPauseButton = document.getElementById('runPauseButton');
     runPauseButton.textContent = state.simulation_running ? '⏸️ Pause' : '▶ Run';
     runPauseButton.className = state.simulation_running ? 'pause' : 'run';
 
-    updateDronesOnMap(state);
-    updatePendingOrdersTable(state);
-
-    const logContainer = document.getElementById('logContainer');
-    logContainer.innerHTML = state.log.slice(0, 50).join('\n');
+    updateDroneStatusList(drones);
+    updatePendingOrdersTable(message.pending_orders_list || []);
+    updateMissionLog(message.mission_log || []);
 }
 
-function updateDronesOnMap(state) {
-    if (!viewer) return;
-    const activeMissions = state.active_missions || {};
-    const drones = Object.values(state.drones);
-    const activeDroneIds = new Set(drones.map(d => d.id));
-
+function updateDroneStatusList(drones) {
+    const container = document.getElementById('droneStatusContainer');
+    drones.sort((a, b) => parseInt(a.id.split(' ')[1]) - parseInt(b.id.split(' ')[1]));
+    let html = '';
     for (const drone of drones) {
-        const position = Cesium.Cartesian3.fromDegrees(drone.pos[0], drone.pos[1], drone.pos[2]);
-        let entity = droneEntities.get(drone.id);
-
-        if (!entity) {
-            entity = viewer.entities.add({
-                id: drone.id,
-                position: position,
-                model: {
-                    uri: 'https://assets.cesium.com/models/CesiumDrone/CesiumDrone.glb',
-                    minimumPixelSize: 64,
-                },
-                label: {
-                    text: '', // Will be updated
-                    font: '12pt monospace',
-                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                    outlineWidth: 2,
-                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                    pixelOffset: new Cesium.Cartesian2(0, -30),
-                    fillColor: Cesium.Color.WHITE,
-                },
-                path: new Cesium.PolylineGraphics({
-                    width: 2,
-                    material: Cesium.Color.CYAN,
-                    show: false,
-                })
-            });
-            droneEntities.set(drone.id, entity);
-        }
-
-        entity.position = position;
-        entity.label.text = `${drone.id}\n${drone.status}\n${(drone.battery / 200 * 100).toFixed(0)}%`;
-
-        const mission = activeMissions[drone.mission_id];
-        if (mission && mission.path_world_coords && mission.path_world_coords.length > 0) {
-            const pathPositions = mission.path_world_coords.flat();
-            entity.path.positions = Cesium.Cartesian3.fromDegreesArrayHeights(pathPositions);
-            entity.path.show = true;
-        } else {
-            entity.path.show = false;
-        }
+        const batteryPercent = (drone.battery / 200) * 100;
+        let batteryClass = '';
+        if (batteryPercent < 40) batteryClass = 'low';
+        if (batteryPercent < 20) batteryClass = 'critical';
+        html += `
+            <div class="drone-item">
+                <span class="drone-name">${drone.id}</span>
+                <span class="drone-status">${drone.status}</span>
+                <div class="battery-bar" title="${batteryPercent.toFixed(1)}%">
+                    <div class="battery-fill ${batteryClass}" style="width: ${batteryPercent}%;"></div>
+                </div>
+            </div>
+        `;
     }
-
-    for (const [droneId, entity] of droneEntities.entries()) {
-        if (!activeDroneIds.has(droneId)) {
-            viewer.entities.remove(entity);
-            droneEntities.delete(droneId);
-        }
-    }
-    viewer.scene.requestRender();
+    container.innerHTML = html;
 }
 
-function updatePendingOrdersTable(state) {
+function updatePendingOrdersTable(orders) {
     const tableBody = document.querySelector("#pendingOrdersTable tbody");
-    const orders = Object.values(state.pending_orders);
-    
     if (orders.length === 0) {
         tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center;">No pending orders</td></tr>`;
         return;
     }
-    
     orders.sort((a, b) => (b.high_priority || false) - (a.high_priority || false));
-
     let html = '';
     for (const order of orders) {
         html += `
             <tr>
                 <td>${order.id.split('-')[1]}</td>
                 <td>${order.dest_name}</td>
-                <td>${order.eta_seconds ? `~${Math.round(order.eta_seconds)}` : 'N/A'}</td>
+                <td>${order.payload_kg.toFixed(1)}kg</td>
                 <td>${order.high_priority ? 'High' : 'Normal'}</td>
             </tr>
         `;
@@ -155,12 +104,21 @@ function updatePendingOrdersTable(state) {
     tableBody.innerHTML = html;
 }
 
-// --- Event Listeners ---
+function updateMissionLog(log) {
+    const container = document.getElementById('logContainer');
+    // Show most recent 50 entries, with newest at the top
+    const reversedLog = [...log].reverse().slice(0, 50);
+    container.innerHTML = reversedLog.map(entry => {
+        const time = new Date(entry.completion_timestamp * 1000).toISOString().substr(11, 8);
+        return `<div>[${time}] ${entry.drone_id} - Mission ${entry.mission_id.split('-')[1]} - ${entry.outcome}</div>`;
+    }).join('');
+}
+
 function setupEventListeners() {
     document.getElementById('runPauseButton').addEventListener('click', () => sendCommand('toggle_simulation'));
     document.getElementById('dispatchButton').addEventListener('click', () => sendCommand('dispatch_missions'));
     document.getElementById('resetButton').addEventListener('click', () => {
-        if (confirm("Are you sure you want to reset the entire simulation?")) {
+        if (confirm("Are you sure? This will reset all simulation progress.")) {
             sendCommand('reset_simulation');
         }
     });
@@ -175,40 +133,27 @@ function setupEventListeners() {
             high_priority: formData.get('high_priority') === 'on'
         };
         sendCommand('add_order', payload);
+        addOrderForm.reset();
     });
 }
 
-// --- Initialization ---
 async function main() {
     setupEventListeners();
-
     try {
-        // Step 1: Fetch the secure token
-        const tokenResponse = await fetch('/api/token');
-        if (!tokenResponse.ok) {
-            throw new Error('Could not fetch Cesium token from server.');
-        }
-        const tokenData = await tokenResponse.json();
-        
-        // Step 2: Initialize Cesium with the token
-        initCesium(tokenData.token);
-        
-        // Step 3: Fetch destinations for the dropdown
+        // FIX: Removed the fetch for the non-existent token API
         const destResponse = await fetch('/api/destinations');
-        DESTINATIONS_LIST = await destResponse.json();
-        
+        const DESTINATIONS_LIST = await destResponse.json();
         const select = document.getElementById('destinationSelect');
-        select.innerHTML = ''; // Clear any existing options
+        select.innerHTML = '';
         for (const destName in DESTINATIONS_LIST) {
             const option = document.createElement('option');
             option.value = destName;
             option.textContent = destName;
             select.appendChild(option);
         }
-
     } catch (error) {
         console.error("Initialization failed:", error);
-        document.getElementById('controlPanel').innerHTML = `<h1>Error</h1><p>Could not initialize application. Check server logs for details, especially for a missing CESIUM_ION_TOKEN in the .env file.</p>`;
+        document.getElementById('leftPanel').innerHTML = `<h1>Error</h1><p>Could not initialize application. Check server logs.</p>`;
     }
 }
 

@@ -35,14 +35,11 @@ class VRPSolver:
                     cost_matrix[from_node, to_node] = 0
                     continue
                 p1, p2 = locations[from_node], locations[to_node]
-                # Use a realistic payload and the predictor for a much better cost estimate
                 payload = DRONE_MAX_PAYLOAD_KG / 2 
                 wind = [0, 0, 0]
                 time, energy = self.predictor.predict(p1, p2, payload, wind, None)
-                # Combine time and energy for a holistic cost, scaled to an integer
                 cost_matrix[from_node, to_node] = int((time + energy) * 10)
         
-        # Allow travel from any location that is a hub to the sink node at zero cost
         for to_node_idx in range(num_hubs):
              cost_matrix[to_node_idx, sink_node] = 0
 
@@ -52,7 +49,7 @@ class VRPSolver:
 
         data = {
             'cost_matrix': cost_matrix.tolist(),
-            'demands': [0] * num_hubs + [int(o['payload_kg'] * 100) for o in orders] + [0], # Hubs/sink have 0 demand
+            'demands': [0] * num_hubs + [int(o['payload_kg'] * 100) for o in orders] + [0],
             'vehicle_capacities': [int(d['max_payload_kg'] * 100) for d in drones],
             'num_vehicles': num_vehicles,
             'starts': starts,
@@ -63,10 +60,6 @@ class VRPSolver:
         return data
 
     def generate_tours(self, drones: List[Dict], orders: List[Dict]) -> List[Dict]:
-        """
-        Solves the MDVRP to generate optimal delivery tours for the given drones and orders.
-        Returns a list of tours, where each tour is a dictionary.
-        """
         if not drones or not orders:
             return []
 
@@ -104,7 +97,8 @@ class VRPSolver:
         search_parameters.local_search_metaheuristic = (
             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
         )
-        search_parameters.time_limit.FromSeconds(5)
+        # FIX: Increased time limit to give the solver a better chance on complex problems.
+        search_parameters.time_limit.FromSeconds(10)
 
         logging.info("Solving MDVRP to generate delivery tours...")
         solution = routing.SolveWithParameters(search_parameters)
@@ -127,11 +121,10 @@ class VRPSolver:
                 route.append(node_index)
                 index = solution.Value(routing.NextVar(index))
             
-            if len(route) <= 2: continue # Only start and (virtual) end node
+            if len(route) <= 2: continue
 
-            # The end hub is the node visited just before the sink node
             last_real_node = route[-2]
-            if last_real_node >= num_hubs: # If the last stop is an order, find the closest hub
+            if last_real_node >= num_hubs:
                 end_hub_id = min(HUBS, key=lambda h: np.linalg.norm(np.array(HUBS[h]) - np.array(order_map[last_real_node]['pos'])))
             elif last_real_node < num_hubs:
                 end_hub_id = data['hub_names'][last_real_node]

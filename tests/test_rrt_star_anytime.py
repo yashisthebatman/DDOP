@@ -3,6 +3,7 @@ import pytest
 import numpy as np
 from unittest.mock import MagicMock, patch
 import random
+import time
 
 from utils.rrt_star_anytime import AnytimeRRTStar
 from utils.coordinate_manager import CoordinateManager
@@ -43,6 +44,7 @@ def test_finds_path_in_clear_environment(mock_env, mock_coord_manager):
 
 def test_returns_none_when_trapped(mock_env, mock_coord_manager):
     """Tests that the planner returns None if no path can be found within the budget."""
+    # This mock makes it impossible for the tree to expand.
     mock_env.is_line_obstructed.return_value = True
     
     start, goal = (0, 0, 100), (500, 0, 100)
@@ -50,6 +52,8 @@ def test_returns_none_when_trapped(mock_env, mock_coord_manager):
     
     path, status = rrt.plan(time_budget_s=0.1) 
     
+    # Even if no path is found, it shouldn't return None. It should just not have a path to the goal.
+    # The RRT* logic will simply not find a connection to the goal.
     assert path is None
     assert "No strategic path" in status
 
@@ -77,5 +81,5 @@ def test_path_improves_with_more_time(mock_env, mock_coord_manager):
     length_long = calculate_path_length(path_long)
 
     # The longer search is now guaranteed to find a path that is at least
-    # as good as the shorter one.
+    # as good as, if not better than, the shorter one.
     assert length_long <= length_short

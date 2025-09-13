@@ -45,7 +45,7 @@ def get_initial_state():
             'available_at': 0.0
         }
 
-    # FIX: Start with zero pending orders. The user will add them manually.
+    # FIX: Start with zero pending orders. The user will add them manually via the UI.
     pending_orders = {}
 
     return {
@@ -71,6 +71,7 @@ def load_state():
 
     if state_doc:
         initial_state = get_initial_state()
+        # Ensure all keys from the default state exist in the loaded state
         for key in initial_state:
             if key not in state_doc:
                 state_doc[key] = initial_state[key]
@@ -96,4 +97,7 @@ def reset_state_file():
     """
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
-    return load_state()
+    db = TinyDB(DB_FILE, storage=JSONStorage, indent=4, cls=NumpyJSONEncoder)
+    initial_state = get_initial_state()
+    db.insert(initial_state)
+    return db.get(doc_id=STATE_DOC_ID)

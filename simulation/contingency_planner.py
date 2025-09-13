@@ -4,7 +4,7 @@ import uuid
 import numpy as np
 from typing import Dict, Any
 
-from config import HUBS
+from config import HUBS, RTH_BATTERY_THRESHOLD_FACTOR
 from utils.geometry import calculate_distance_3d
 from planners.single_agent_planner import SingleAgentPlanner
 
@@ -49,8 +49,11 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
         log_entry = {
             "mission_id": original_mission_id, "drone_id": drone_id,
             "completion_timestamp": state['simulation_time'], "outcome": f"Failed: {reason}",
-            "planned_duration_sec": 0, "actual_duration_sec": 0, "planned_energy_wh": 0,
-            "actual_energy_wh": 0, "number_of_stops": 0,
+            "planned_duration_sec": original_mission.get('total_planned_time', 0), 
+            "actual_duration_sec": state['simulation_time'] - original_mission.get('start_time', 0),
+            "planned_energy_wh": original_mission.get('total_planned_energy', 0),
+            "actual_energy_wh": original_mission.get('start_battery', 0) - drone['battery'], 
+            "number_of_stops": len(original_mission.get('stops', [])),
         }
         state['completed_missions_log'].append(log_entry)
         del state['active_missions'][original_mission_id]
@@ -60,7 +63,7 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
     _, hub_pos = _find_nearest_hub(drone['pos'], coord_manager)
     if not hub_pos:
         log_event(state, f"CRITICAL: {drone_id} could not find a hub to return to!")
-        drone['status'] = 'IDLE'
+        drone['status'] = 'IDLE' # Drone is lost, requires manual recovery
         return
 
     planner = SingleAgentPlanner(planners['env'], planners['predictor'], coord_manager)
@@ -73,18 +76,21 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
 
     # 3. Create and assign the new emergency mission
     total_time, total_energy = 0, 0
-    for i in range(len(path) - 1):
-        p1, p2 = path[i], path[i+1]
-        t, e = planners['predictor'].predict(p1, p2, 0, [0,0,0])
-        total_time += t
-        total_energy += e
+    if path and len(path) > 1:
+        for i in range(len(path) - 1):
+            p1, p2 = path[i], path[i+1]
+            t, e = planners['predictor'].predict(p1, p2, 0, [0,0,0])
+            total_time += t
+            total_energy += e
 
     emergency_mission_id = f"EM-{uuid.uuid4().hex[:6]}"
     emergency_mission = {
         'mission_id': emergency_mission_id, 'drone_id': drone_id, 'order_ids': [], 'stops': [],
         'start_pos': drone['pos'], 'destinations': [hub_pos], 'payload_kg': 0,
         'path_world_coords': path, 'total_planned_time': total_time, 'total_planned_energy': total_energy,
-        'start_time': state['simulation_time'], 'start_battery': drone['battery']
+        'start_time': state['simulation_time'], 'start_battery': drone['battery'],
+        'mission_time_elapsed': 0.0, 'flight_time_elapsed': 0.0, 'total_maneuver_time': 0,
+        'end_hub': _find_nearest_hub(hub_pos, coord_manager)[0]
     }
     state['active_missions'][emergency_mission_id] = emergency_mission
     drone['status'] = 'EMERGENCY_RETURN'
@@ -106,15 +112,18 @@ def check_for_contingencies(state: Dict, planners: Dict):
         if not mission: continue
         
         # --- Check 1: Low Battery ---
+        # Predict energy to finish current mission AND return to nearest hub afterwards
         final_dest = mission['destinations'][-1]
-        _, nearest_hub_pos = _find_nearest_hub(final_dest, coord_manager)
+        _, nearest_hub_pos_after_mission = _find_nearest_hub(final_dest, coord_manager)
         
-        if nearest_hub_pos:
-            energy_to_dest, _ = predictor.predict(drone['pos'], final_dest, mission['payload_kg'], [0,0,0])
-            energy_to_hub, _ = predictor.predict(final_dest, nearest_hub_pos, 0, [0,0,0])
+        if nearest_hub_pos_after_mission:
+            _, energy_to_finish_mission = predictor.predict(drone['pos'], final_dest, mission['payload_kg'], [0,0,0])
+            _, energy_to_return_to_hub = predictor.predict(final_dest, nearest_hub_pos_after_mission, 0, [0,0,0])
             
-            # Trigger RTH if battery is less than required energy plus a 10% safety buffer
-            if drone['battery'] < (energy_to_dest + energy_to_hub) * 1.1:
+            # FIX: Use the factor from config file instead of a hardcoded value.
+            required_energy = (energy_to_finish_mission + energy_to_return_to_hub) * RTH_BATTERY_THRESHOLD_FACTOR
+            
+            if drone['battery'] < required_energy:
                 _trigger_emergency_return(state, drone_id, "Critically Low Battery", planners)
                 continue # Drone is now in emergency, skip other checks for it
 
@@ -126,6 +135,7 @@ def check_for_contingencies(state: Dict, planners: Dict):
                 distances = [np.linalg.norm(current_pos_np - np.array(p)) for p in path]
                 current_idx = np.argmin(distances)
 
+                # Check the remainder of the path for obstructions
                 for i in range(current_idx, len(path) - 1):
                     if env.is_line_obstructed(path[i], path[i+1]):
                         _trigger_emergency_return(state, drone_id, "Path Invalidated by NFZ", planners)

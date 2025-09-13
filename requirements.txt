@@ -25,6 +25,9 @@ uvicorn[standard] # The server that runs the FastAPI app
 websockets      # For real-time communication
 python-socketio # Dependency for WebSocket integration
 
+# NEW: 3D Visualization Library
+plotly          # For generating 3D plot data on the backend
+
 # Testing framework
 pytest
 
