@@ -10,8 +10,7 @@
 <body>
     <div id="plotContainer"></div>
 
-    <!-- Main Control Panel on the Left -->
-    <div id="leftPanel">
+    <div id="leftPanel" class="panel">
         <div class="header">
             <h1>Fleet & Mission Control</h1>
             <div id="simTime">Sim Time: 0.0s</div>
@@ -38,33 +37,27 @@
             </form>
         </div>
 
-        <!-- FIX: Added Drone Status List -->
         <div class="content-section drone-status-section">
             <h2>Drone Status</h2>
             <div class="table-container" id="droneStatusContainer">
-                <!-- Drone status will be populated by JS -->
-            </div>
+                </div>
         </div>
     </div>
 
-    <!-- Log and Order Panel on the Right -->
-    <div id="rightPanel">
-        <!-- FIX: Added Pending Orders Table -->
+    <div id="rightPanel" class="panel">
         <div class="content-section">
             <h2>Pending Orders</h2>
             <div class="table-container">
                 <table id="pendingOrdersTable">
                     <thead><tr><th>ID</th><th>Destination</th><th>Payload</th><th>Priority</th></tr></thead>
-                    <tbody><!-- Populated by JS --></tbody>
+                    <tbody></tbody>
                 </table>
             </div>
         </div>
-        <!-- FIX: Renamed to Mission Log -->
         <div class="content-section log-section">
             <h2>Mission Log</h2>
             <div id="logContainer">
-                <!-- Log entries will be populated by JS -->
-            </div>
+                </div>
         </div>
     </div>
 
