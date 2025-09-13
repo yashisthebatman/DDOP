@@ -1,7 +1,7 @@
 # FILE: environment.py
 import numpy as np
 from dataclasses import dataclass
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Optional # <--- FIX: Added Optional here
 from opensimplex import OpenSimplex
 from rtree import index
 import logging
@@ -70,6 +70,26 @@ class Environment:
         self._index_static_nfzs()
         logging.info(f"Spatial index ready. Indexed {len(self.obstacles)} obstacles.")
 
+    def get_building_at(self, world_pos_xy: Tuple[float, float]) -> Optional[Building]:
+        """Finds the building object at a given lon/lat, if one exists."""
+        lon, lat = world_pos_xy
+        for building in self.buildings:
+            cx, cy = building.center_xy
+            sx, sy = building.size_xy
+            if (cx - sx/2 <= lon <= cx + sx/2) and (cy - sy/2 <= lat <= cy + sy/2):
+                return building
+        return None
+
+    def get_surface_height(self, world_pos_xy: Tuple[float, float]) -> float:
+        """
+        Returns the height of a building's roof at a given lon/lat,
+        or the minimum flight altitude (ground level) if no building is present.
+        """
+        building = self.get_building_at(world_pos_xy)
+        if building:
+            return building.height
+        return MIN_ALTITUDE
+
     def _add_obstacle_to_index(self, bounds_m: tuple):
         obstacle_id = self.obstacle_counter
         self.obstacle_index.insert(obstacle_id, bounds_m)
@@ -85,24 +105,20 @@ class Environment:
         np.random.seed(42)
         all_poi = list(HUBS.values()) + list(DESTINATIONS.values())
 
-        # Define street grid parameters
-        num_avenues = 10  # North-South streets
-        num_streets = 20 # East-West streets
+        num_avenues = 10
+        num_streets = 20
 
         lon_range = AREA_BOUNDS[2] - AREA_BOUNDS[0]
         lat_range = AREA_BOUNDS[3] - AREA_BOUNDS[1]
 
-        # Calculate block sizes, leaving space for streets
         block_width = lon_range / num_avenues * 0.75
         block_height = lat_range / num_streets * 0.75
         
         for i in range(num_avenues):
             for j in range(num_streets):
-                # Calculate center of the block
                 center_x = AREA_BOUNDS[0] + (i + 0.5) * (lon_range / num_avenues)
                 center_y = AREA_BOUNDS[1] + (j + 0.5) * (lat_range / num_streets)
 
-                # Skip blocks that contain a Hub or Destination
                 is_conflicting = False
                 for poi in all_poi:
                     poi_lon, poi_lat, _ = poi
@@ -113,20 +129,16 @@ class Environment:
                 if is_conflicting:
                     continue
 
-                # DEFINITIVE FIX: Increase this value to make buildings more sparse.
-                # 0.6 means 60% of blocks will be empty, only 40% will have buildings.
                 if np.random.rand() < 0.6: 
                     continue
                 
-                # Vary height - taller buildings downtown (south)
-                height_factor = 1.0 - (j / num_streets) # Taller in the south
+                height_factor = 1.0 - (j / num_streets)
                 altitude = np.random.uniform(30, 120) * (1 + height_factor)
-                altitude = min(altitude, MAX_ALTITUDE * 0.9) # Cap height
+                altitude = min(altitude, MAX_ALTITUDE * 0.9)
 
                 building = Building(id=len(buildings), center_xy=(center_x, center_y), size_xy=(block_width, block_height), height=altitude)
                 buildings.append(building)
                 
-                # Index the building obstacle
                 bottom_left_world = (center_x - block_width / 2, center_y - block_height / 2, 0)
                 top_right_world = (center_x + block_width / 2, center_y + block_height / 2, altitude)
                 min_mx, min_my, _ = self.coord_manager.world_to_meters(bottom_left_world)
@@ -184,8 +196,6 @@ class Environment:
     
     def update_environment(self, simulation_time: float, time_step: float):
         self.weather.update_weather(time_step)
-        # The logic for adding a dynamic NFZ is now handled externally
-        # by the event injector to allow for random, unpredictable events.
         
     def create_planning_grid(self) -> np.ndarray:
         w, h, d = self.coord_manager.grid_width, self.coord_manager.grid_height, self.coord_manager.grid_depth

@@ -7,21 +7,25 @@ scipy
 
 # Pathfinding and graph theory
 networkx
-Rtree         # Python wrapper for libspatialindex
-ortools       # For Vehicle Routing Problem solving
+Rtree
+ortools
 
 # Simulation environment
-opensimplex   # For Perlin/Simplex noise in weather simulation
-tinydb        # For simple, file-based state persistence
+opensimplex
+tinydb
 
 # Machine Learning model handling
 scikit-learn
 joblib
-mlflow        # For MLOps and model registry
+mlflow
 
-# Web application framework
-streamlit
-plotly
+# NEW: Backend Web Framework & Server
+fastapi         # The core web framework
+uvicorn[standard] # The server that runs the FastAPI app
+websockets      # For real-time communication
+python-socketio # Dependency for WebSocket integration
 
 # Testing framework
 pytest
+
+python-dotenv

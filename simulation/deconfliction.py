@@ -38,7 +38,9 @@ def initiate_avoidance(drone: dict, maneuver: str):
 
     if maneuver == "climb":
         new_alt = min(MAX_ALTITUDE, current_pos[2] + altitude_change)
-        drone['avoidance_target_pos'] = (current_pos[0], current_pos[1], new_alt)
+        # FIX: Ensure position is a tuple of standard Python floats
+        drone['avoidance_target_pos'] = (float(current_pos[0]), float(current_pos[1]), float(new_alt))
     else: # descend
         new_alt = max(MIN_ALTITUDE, current_pos[2] - altitude_change)
-        drone['avoidance_target_pos'] = (current_pos[0], current_pos[1], new_alt)
+        # FIX: Ensure position is a tuple of standard Python floats
+        drone['avoidance_target_pos'] = (float(current_pos[0]), float(current_pos[1]), float(new_alt))

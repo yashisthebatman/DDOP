@@ -40,3 +40,5 @@ data/real_world_flight_segments.csv
 
 # If you generate any log files
 *.log
+
+.env
