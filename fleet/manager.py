@@ -82,8 +82,6 @@ class FleetManager:
                 logging.warning(f"Drone {drone_id} is no longer IDLE. Aborting planning for {mission_id}.")
                 return False, {"mission_failures": [mission_id]}
             
-            # THIS IS THE KEY CHANGE: Add the full mission object to active_missions first.
-            # The updates will be MERGED into this object later.
             state['active_missions'][mission_id] = mission.to_dict()
             state['drones'][drone_id]['status'] = 'PLANNING'
             state['drones'][drone_id]['mission_id'] = mission_id
@@ -98,7 +96,10 @@ class FleetManager:
         
         if not solution or drone_id not in solution or not solution[drone_id]:
             logging.error(f"CBSH planning FAILED for agent {drone_id} on mission {mission_id}.")
-            drone_updates[drone_id] = {'status': 'IDLE', 'mission_id': None}
+            # Return the full drone object to prevent data corruption
+            drone_updates[drone_id] = state['drones'][drone_id].copy()
+            drone_updates[drone_id]['status'] = 'IDLE'
+            drone_updates[drone_id]['mission_id'] = None
             return False, {"drone_updates": drone_updates, "mission_failures": [mission_id], "error": "CBS could not find a solution."}
 
         logging.info(f"CBSH planning successful for {drone_id}. Preparing mission updates.")
@@ -109,7 +110,6 @@ class FleetManager:
         
         total_energy = 0
         if path and len(path) > 1:
-            # Re-get the mission object from the main state to ensure we have the latest version
             mission_dict = state['active_missions'][mission_id]
             for i in range(len(world_path) - 1):
                 p1, p2 = world_path[i], world_path[i+1]
@@ -130,8 +130,12 @@ class FleetManager:
                 'start_battery': state['drones'][drone_id]['battery'],
                 'current_path_target_index': 1
             }
-            drone_updates[drone_id] = {'status': 'EN ROUTE'}
+            # Return the full drone object with updates to prevent corruption
+            drone_updates[drone_id] = state['drones'][drone_id].copy()
+            drone_updates[drone_id]['status'] = 'EN ROUTE'
             return True, {"drone_updates": drone_updates, "mission_updates": mission_updates, "successful_mission_ids": [mission_id]}
         else:
-            drone_updates[drone_id] = {'status': 'IDLE', 'mission_id': None}
+            drone_updates[drone_id] = state['drones'][drone_id].copy()
+            drone_updates[drone_id]['status'] = 'IDLE'
+            drone_updates[drone_id]['mission_id'] = None
             return False, {"drone_updates": drone_updates, "mission_failures": [mission_id]}

@@ -45,7 +45,6 @@ def get_initial_state():
             'available_at': 0.0
         }
 
-    # FIX: Start with zero pending orders. The user will add them manually via the UI.
     pending_orders = {}
 
     return {
@@ -75,7 +74,8 @@ def load_state():
         for key in initial_state:
             if key not in state_doc:
                 state_doc[key] = initial_state[key]
-        for drone_id, drone_data in state_doc['drones'].items():
+        # FINAL FIX: This loop ensures every drone dictionary has its 'id' field, preventing KeyErrors.
+        for drone_id, drone_data in state_doc.get('drones', {}).items():
             if 'id' not in drone_data:
                 drone_data['id'] = drone_id
         return state_doc
