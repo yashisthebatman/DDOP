@@ -16,7 +16,16 @@ def get_hub_by_id(hub_id):
 @pytest.fixture
 def mock_planners():
     """Provides a mock planners dict needed by the real update_simulation."""
-    return {"coord_manager": CoordinateManager()}
+    # MODIFIED: Expanded mock to support contingency checks within update_simulation
+    env_mock = MagicMock()
+    env_mock.was_nfz_just_added = False
+    predictor_mock = MagicMock()
+    predictor_mock.predict.return_value = (10.0, 5.0) # Default safe values
+    return {
+        "coord_manager": CoordinateManager(),
+        "env": env_mock,
+        "predictor": predictor_mock
+    }
 
 def test_drone_relocates_after_rebalance_mission(mock_planners):
     """Simulate a rebalancing mission and assert drone's home hub is updated."""

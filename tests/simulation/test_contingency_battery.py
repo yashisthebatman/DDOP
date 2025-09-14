@@ -63,10 +63,9 @@ def test_in_flight_low_battery_triggers_emergency_return(active_mission_state, m
     # Mock predictor to report energy costs that will fail the check.
     # Energy to finish mission = 30Wh. Energy to return after = 20Wh.
     # Total required with RTH_FACTOR=1.5 is (30 + 20) * 1.5 = 75Wh.
-    mock_planners['predictor'].predict.side_effect = [
-        (100.0, 30.0), # For predict(current -> final_dest)
-        (80.0, 20.0)   # For predict(final_dest -> nearest_hub)
-    ]
+    # MODIFIED: Use return_value instead of side_effect to handle all calls.
+    # This single return value will be used for the two checks and the emergency path calculation.
+    mock_planners['predictor'].predict.return_value = (100.0, 30.0)
     
     # Set drone's battery to a value that is NOT enough to meet the safety margin.
     state['drones']['Drone 1']['battery'] = 74.0

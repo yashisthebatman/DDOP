@@ -98,6 +98,10 @@ def test_rejects_mission_with_insufficient_safety_margin(dispatcher, mock_fleet_
     
     # This drone has enough for the raw trip (40Wh) but not for the safety margin (72Wh).
     state['drones']['Drone 1']['battery'] = 70.0 
+
+    # MODIFIED: Make all other drones at the hub unavailable so only Drone 1 is considered.
+    for i in range(2, 6):
+        state['drones'][f'Drone {i}']['status'] = 'RECHARGING'
     
     hub_a_loc = get_hub_by_id(hub_a_id)['location']
     order = {'id': 'O1', 'pos': (hub_a_loc[0] + 0.01, hub_a_loc[1], 50), 'payload_kg': 1.0}

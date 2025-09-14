@@ -120,6 +120,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 def update_simulation(state, planners):
+    # FIX PART 1: Moved contingency check to the beginning of the update cycle.
+    # This ensures that we check for and handle problems (like low battery)
+    # BEFORE the drone moves or completes a mission in this tick.
+    contingency_planner.check_for_contingencies(state, planners)
+
     state['simulation_time'] += SIMULATION_TIME_STEP
     coord_manager = planners['coord_manager']
     for drone in state['drones'].values():
@@ -201,8 +206,15 @@ def update_simulation(state, planners):
             drone['battery'] = mission.get('start_battery', DRONE_BATTERY_WH) - (progress * mission.get('total_planned_energy', 0))
 
     for mission_id in missions_to_complete:
+        # FIX PART 2: Re-fetch the mission object from state. It might have been deleted by the
+        # contingency planner since it was added to missions_to_complete.
+        # If it's gone, we must not process it as a success.
         mission = state.get('active_missions', {}).get(mission_id)
-        if not mission: continue
+        if not mission:
+            # This handles the race condition where a mission is completed and
+            # fails in the same tick. We respect the failure.
+            continue
+            
         drone_id = mission['drone_id']
         drone = state['drones'][drone_id]
         
@@ -317,7 +329,6 @@ async def simulation_loop():
             if state.get('simulation_running', False):
                 with state_lock:
                     update_simulation(state, planners)
-                    contingency_planner.check_for_contingencies(state, planners)
                     event_injector.inject_random_event(state, planners['env'])
                     system_state.save_state(state)
                 await broadcast_state()

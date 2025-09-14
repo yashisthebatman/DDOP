@@ -49,7 +49,16 @@ def test_mission_log_creation_on_completion():
         'end_hub': end_hub_obj['id']
     }
     
-    mock_planners = {"coord_manager": CoordinateManager()}
+    # MODIFIED: Create a more complete mock planners dict to satisfy the contingency checker.
+    env_mock = MagicMock()
+    env_mock.was_nfz_just_added = False
+    predictor_mock = MagicMock()
+    predictor_mock.predict.return_value = (10.0, 5.0) # a default safe value
+    mock_planners = {
+        "coord_manager": CoordinateManager(),
+        "env": env_mock,
+        "predictor": predictor_mock
+    }
     
     loop_count = 0
     while mission_id in state['active_missions'] and loop_count < 1000:

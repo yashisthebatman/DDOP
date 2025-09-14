@@ -92,7 +92,9 @@ def check_for_contingencies(state: Dict, planners: Dict):
         _, nearest_hub_pos_after_mission = _find_nearest_hub(final_dest, coord_manager)
         if nearest_hub_pos_after_mission:
             current_wind = env.weather.get_wind_at_location(*drone['pos'])
-            _, energy_to_finish_mission = predictor.predict(drone['pos'], final_dest, mission['payload_kg'], current_wind)
+            # MODIFIED: Use .get() to safely access payload_kg, defaulting to 0.0.
+            payload = mission.get('payload_kg', 0.0)
+            _, energy_to_finish_mission = predictor.predict(drone['pos'], final_dest, payload, current_wind)
             _, energy_to_return_to_hub = predictor.predict(final_dest, nearest_hub_pos_after_mission, 0, current_wind)
             required_energy = (energy_to_finish_mission + energy_to_return_to_hub) * RTH_BATTERY_THRESHOLD_FACTOR
             if drone['battery'] < required_energy:
