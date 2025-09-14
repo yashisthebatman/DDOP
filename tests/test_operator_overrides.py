@@ -5,11 +5,11 @@ from unittest.mock import MagicMock
 import time
 import numpy as np
 
-# FIX: Import the REAL simulation logic, not a local copy.
 from server import update_simulation
 from system_state import get_initial_state
 from config import DRONE_BATTERY_WH
-from dispatch.dispatcher import Dispatcher, MIN_ORDERS_FOR_BATCH
+from config import MIN_ORDERS_TO_DISPATCH
+from dispatch.dispatcher import Dispatcher
 
 def test_pause_mission_halts_movement():
     """Test that pausing a mission prevents the drone from moving."""
@@ -25,47 +25,51 @@ def test_pause_mission_halts_movement():
     state['active_missions']['M-123'] = {
         'drone_id': drone_id, 'start_time': 0.0, 'total_planned_time': 100.0,
         'path_world_coords': [(10, 10, 50), (100, 100, 50)],
-        'is_paused': True,  # Mission is paused
+        'is_paused': True,
         'start_battery': 200, 'total_planned_energy': 30, 'stops': [],
         'mission_time_elapsed': 0.0, 'flight_time_elapsed': 0.0, 'total_maneuver_time': 0,
-        'order_ids': []
+        'order_ids': [],
+        'destinations': [(100, 100, 50)],
+        'current_stop_index': 0
     }
     
     initial_pos = drone['pos']
     mock_planners = {"coord_manager": MagicMock()}
-    update_simulation(state, mock_planners) # Run one tick
-    
-    assert drone['pos'] == initial_pos # Position should not change
+    update_simulation(state, mock_planners) 
 
-    # Now resume and check again
+    assert drone['pos'] == initial_pos 
+
+    # FIX: Advance the flight time before unpausing to ensure a noticeable position change.
+    state['active_missions']['M-123']['flight_time_elapsed'] = 10.0
     state['active_missions']['M-123']['is_paused'] = False
     update_simulation(state, mock_planners)
-    assert drone['pos'] != initial_pos # Position should now change
+    assert drone['pos'] != initial_pos
 
-def test_high_priority_triggers_dispatcher():
+def test_high_priority_triggers_dispatcher(monkeypatch):
     """Test that a high priority order bypasses the minimum batch size."""
+    monkeypatch.setattr('dispatch.dispatcher.MIN_ORDERS_TO_DISPATCH', 5)
+    
     mock_vrp_solver = MagicMock()
+    mock_fleet_manager = MagicMock()
     
     mock_stops = [{'id': 'O2', 'pos': (2,2,2), 'payload_kg': 1.0, 'dest_name': 'Test'}]
     mock_vrp_solver.generate_tours.return_value = [{'drone_id': 'Drone 1', 'start_hub_id': 'Hub A (South Manhattan)', 'end_hub_id': 'Hub B (Midtown East)', 'stops': mock_stops, 'payload': 1.0}]
     
-    dispatcher = Dispatcher(mock_vrp_solver)
+    dispatcher = Dispatcher(mock_vrp_solver, mock_fleet_manager)
     state = get_initial_state()
     
-    # Ensure at least one drone is IDLE for the dispatcher to pick
     state['drones']['Drone 1']['status'] = 'IDLE'
 
-    # Condition: 1 order, less than MIN_ORDERS_FOR_BATCH
     state['pending_orders'] = {'O1': {'id': 'O1', 'pos': (1,1,1), 'payload_kg': 1, 'high_priority': False, 'dest_name': 'Test'}}
     
     dispatched = dispatcher.dispatch_missions(state)
     assert not dispatched
     mock_vrp_solver.generate_tours.assert_not_called()
     
-    # Add a high priority order
     state['pending_orders']['O2'] = {'id': 'O2', 'pos': (2,2,2), 'payload_kg': 1, 'high_priority': True, 'dest_name': 'Test'}
     
     dispatched = dispatcher.dispatch_missions(state)
 
     assert dispatched
     mock_vrp_solver.generate_tours.assert_called_once()
+    mock_fleet_manager.add_mission_to_queue.assert_called_once()

@@ -1,43 +1,53 @@
+# FILE: utils/path_smoother.py
 import numpy as np
 from scipy.interpolate import splev, splprep
 import logging
 from typing import List, Tuple, Dict
 
+from config import PATH_SMOOTHING_OBSTACLE_CLEARANCE_METERS
+
 class PathSmoother:
     """Post-processes grid-based paths to create smoother B-spline curves."""
     
-    def smooth_path(self, path: List[Tuple], env) -> List[Tuple]:
-        """Generates a smooth B-spline path and discretizes it."""
-        num_points_in_path = len(path)
-        
-        if num_points_in_path < 2:
+    def smooth_path(self, path: List[Tuple], env, depth=0) -> List[Tuple]:
+        """
+        Generates a smooth B-spline path, validates it against obstacles,
+        and uses recursion to smooth problematic segments.
+        """
+        if depth > 2: # Max recursion depth to prevent infinite loops
+            logging.warning("Max smoothing recursion depth reached. Returning original path segment.")
             return path
         
-        # The spline degree 'k' must be less than the number of points.
-        # We dynamically adjust k for short paths to prevent a scipy error.
-        # k must be 1, 2, or 3. Max possible k is num_points - 1.
+        num_points_in_path = len(path)
+        if num_points_in_path < 2: return path
+        
         spline_degree = min(num_points_in_path - 1, 3)
-
-        if spline_degree < 1:
-             return path # Cannot create a spline
+        if spline_degree < 1: return path
 
         try:
             path_np = np.array(path).T
-            # A smoothing factor of s=0 forces interpolation through all points,
-            # ensuring a denser path is generated from the original waypoints.
             tck, u = splprep(path_np, s=0, k=spline_degree)
-            
             num_points_out = max(num_points_in_path * 5, 20)
             u_new = np.linspace(u.min(), u.max(), num_points_out)
             x_new, y_new, z_new = splev(u_new, tck, der=0)
             
             smoothed_path = list(zip(x_new, y_new, z_new))
 
+            # --- NEW: Iterative Collision Checking ---
             for i in range(len(smoothed_path) - 1):
-                if env.is_line_obstructed(smoothed_path[i], smoothed_path[i+1]):
-                    logging.warning("Path smoothing created a collision. Reverting to original path.")
-                    return path
-            
+                p1, p2 = smoothed_path[i], smoothed_path[i+1]
+                # Check not just the line, but intermediate points for safety
+                num_interp_points = 5
+                for j in range(num_interp_points + 1):
+                    interp_point = tuple(np.array(p1) + (j / num_interp_points) * (np.array(p2) - np.array(p1)))
+                    if env.is_point_obstructed(interp_point):
+                        logging.warning(f"Smoothed path segment {i} collided with obstacle at depth {depth}. Subdividing.")
+                        # --- NEW: Subdivision on collision ---
+                        mid_index = num_points_in_path // 2
+                        first_half = self.smooth_path(path[:mid_index+1], env, depth + 1)
+                        second_half = self.smooth_path(path[mid_index:], env, depth + 1)
+                        return first_half[:-1] + second_half
+
             return smoothed_path
         except Exception as e:
             logging.error(f"Failed to smooth path: {e}. Returning original path.")
@@ -49,8 +59,7 @@ class PathSmoother:
         Assumes each drone moves one waypoint per time step.
         """
         agent_ids = list(solution.keys())
-        if len(agent_ids) < 2:
-            return True
+        if len(agent_ids) < 2: return True
 
         max_time = max(len(p) for p in solution.values())
 

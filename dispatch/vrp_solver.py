@@ -40,8 +40,17 @@ class VRPSolver:
                 time, energy = self.predictor.predict(p1, p2, payload, wind, None)
                 cost_matrix[from_node, to_node] = int((time + energy) * 10)
         
-        for to_node_idx in range(num_hubs):
-             cost_matrix[to_node_idx, sink_node] = 0
+        # FIX: The cost to the 'sink' is now the cost to return to the nearest hub,
+        # ensuring the return trip is factored into the VRP solution.
+        for from_node_idx in range(num_locations):
+            from_pos = locations[from_node_idx]
+            min_cost_to_hub = float('inf')
+            for hub_pos in all_hubs_pos:
+                # Payload is 0 for the return trip
+                time, energy = self.predictor.predict(from_pos, hub_pos, 0, [0, 0, 0], None)
+                cost = int((time + energy) * 10)
+                min_cost_to_hub = min(min_cost_to_hub, cost)
+            cost_matrix[from_node_idx, sink_node] = min_cost_to_hub
 
         num_vehicles = len(drones)
         starts = [hub_map[d['home_hub']] for d in drones]
@@ -97,7 +106,6 @@ class VRPSolver:
         search_parameters.local_search_metaheuristic = (
             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
         )
-        # FIX: Increased time limit to give the solver a better chance on complex problems.
         search_parameters.time_limit.FromSeconds(10)
 
         logging.info("Solving MDVRP to generate delivery tours...")
@@ -121,18 +129,18 @@ class VRPSolver:
                 route.append(node_index)
                 index = solution.Value(routing.NextVar(index))
             
-            if len(route) <= 2: continue
+            # A valid route must have a start and at least one stop.
+            if len(route) <= 1: continue
 
-            last_real_node = route[-2]
+            # Determine the optimal end hub based on the last actual stop.
+            last_real_node = route[-1]
             if last_real_node >= num_hubs:
-                end_hub_id = min(HUBS, key=lambda h: np.linalg.norm(np.array(HUBS[h]) - np.array(order_map[last_real_node]['pos'])))
-            elif last_real_node < num_hubs:
-                end_hub_id = data['hub_names'][last_real_node]
-            else:
-                logging.warning(f"Could not determine end hub for drone {drone_map[vehicle_id]['id']}. Skipping.")
+                last_stop_pos = order_map[last_real_node]['pos']
+                end_hub_id = min(HUBS, key=lambda h: np.linalg.norm(np.array(HUBS[h]) - np.array(last_stop_pos)))
+            else: # The route was just hub-to-hub (empty)
                 continue
             
-            order_nodes = [node for node in route if node >= num_hubs and node < data['num_locations'] - 1]
+            order_nodes = [node for node in route if node >= num_hubs]
             for node_index in order_nodes:
                 order = order_map[node_index]
                 tour_stops.append(order)

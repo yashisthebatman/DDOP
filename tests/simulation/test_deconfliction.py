@@ -4,6 +4,7 @@ import pytest
 from simulation.deconfliction import check_and_resolve_conflicts
 from utils.coordinate_manager import CoordinateManager
 from config import AVOIDANCE_MANEUVER_ALTITUDE_SEP
+from unittest.mock import MagicMock
 
 @pytest.fixture
 def mock_drones():
@@ -21,31 +22,39 @@ def mock_drones():
         }
     }
 
-def test_conflict_is_detected(mock_drones):
+@pytest.fixture
+def mock_planners():
+    """Provides the nested dictionary structure the function expects."""
+    env_mock = MagicMock()
+    env_mock.is_point_obstructed.return_value = False # Ensure avoidance points are valid
+    return {
+        "coord_manager": CoordinateManager(),
+        "env": env_mock
+    }
+
+def test_conflict_is_detected(mock_drones, mock_planners):
     """Manually place two drones within the safety bubble and assert they start avoiding."""
-    coord_manager = CoordinateManager()
     drones = mock_drones
     
-    # Place Drone B very close to Drone A (10 meters away horizontally)
     drones["Drone-B"]["pos"] = (-74.0001, 40.72, 100.0)
 
-    check_and_resolve_conflicts(drones, coord_manager)
+    # FIX: Pass the mock_planners dictionary, not just the coord_manager
+    check_and_resolve_conflicts(drones, mock_planners)
     
     assert drones["Drone-A"]["status"] == "AVOIDING"
     assert "original_status_before_avoid" in drones["Drone-A"]
     assert drones["Drone-B"]["status"] == "AVOIDING"
     assert "original_status_before_avoid" in drones["Drone-B"]
 
-def test_avoidance_maneuver_sets_correct_targets(mock_drones):
+def test_avoidance_maneuver_sets_correct_targets(mock_drones, mock_planners):
     """After triggering a conflict, assert target altitudes are correct."""
-    coord_manager = CoordinateManager()
     drones = mock_drones
     initial_alt = drones["Drone-A"]["pos"][2]
 
-    # Place drones close enough to trigger conflict
     drones["Drone-B"]["pos"] = (-74.0001, 40.72, 100.0)
 
-    check_and_resolve_conflicts(drones, coord_manager)
+    # FIX: Pass the mock_planners dictionary
+    check_and_resolve_conflicts(drones, mock_planners)
     
     # Drone-A is alphabetically smaller, so it should climb
     drone_a_target_alt = drones["Drone-A"]["avoidance_target_pos"][2]

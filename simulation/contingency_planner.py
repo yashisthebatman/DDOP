@@ -45,7 +45,6 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
         if orders_returned > 0:
             log_event(state, f"Returned {orders_returned} orders from failed mission {original_mission_id} to queue.")
         
-        # Log the failure for analytics
         log_entry = {
             "mission_id": original_mission_id, "drone_id": drone_id,
             "completion_timestamp": state['simulation_time'], "outcome": f"Failed: {reason}",
@@ -79,7 +78,8 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
     if path and len(path) > 1:
         for i in range(len(path) - 1):
             p1, p2 = path[i], path[i+1]
-            t, e = planners['predictor'].predict(p1, p2, 0, [0,0,0])
+            wind = planners['env'].weather.get_wind_at_location(*p1)
+            t, e = planners['predictor'].predict(p1, p2, 0, wind)
             total_time += t
             total_energy += e
 
@@ -104,28 +104,30 @@ def check_for_contingencies(state: Dict, planners: Dict):
     predictor = planners['predictor']
     coord_manager = planners['coord_manager']
     
-    drones_to_check = [d for d in state['drones'].values() if d['status'] == 'EN ROUTE']
+    drones_to_check = [d for d in state['drones'].values() if d['status'] in ['EN ROUTE', 'RETURNING_TO_HUB']]
 
     for drone in drones_to_check:
         drone_id = drone['id']
         mission = state['active_missions'].get(drone['mission_id'])
         if not mission: continue
         
-        # --- Check 1: Low Battery ---
-        # Predict energy to finish current mission AND return to nearest hub afterwards
+        # --- Check 1: Low Battery (with real-time weather) ---
         final_dest = mission['destinations'][-1]
         _, nearest_hub_pos_after_mission = _find_nearest_hub(final_dest, coord_manager)
         
         if nearest_hub_pos_after_mission:
-            _, energy_to_finish_mission = predictor.predict(drone['pos'], final_dest, mission['payload_kg'], [0,0,0])
-            _, energy_to_return_to_hub = predictor.predict(final_dest, nearest_hub_pos_after_mission, 0, [0,0,0])
+            # FIX: Use current, real-time wind conditions for prediction
+            current_wind = env.weather.get_wind_at_location(*drone['pos'])
             
-            # FIX: Use the factor from config file instead of a hardcoded value.
+            _, energy_to_finish_mission = predictor.predict(drone['pos'], final_dest, mission['payload_kg'], current_wind)
+            # Assume wind at final destination is similar for return prediction
+            _, energy_to_return_to_hub = predictor.predict(final_dest, nearest_hub_pos_after_mission, 0, current_wind)
+            
             required_energy = (energy_to_finish_mission + energy_to_return_to_hub) * RTH_BATTERY_THRESHOLD_FACTOR
             
             if drone['battery'] < required_energy:
                 _trigger_emergency_return(state, drone_id, "Critically Low Battery", planners)
-                continue # Drone is now in emergency, skip other checks for it
+                continue
 
         # --- Check 2: Path Invalidated by New NFZ ---
         if env.was_nfz_just_added:
@@ -135,12 +137,10 @@ def check_for_contingencies(state: Dict, planners: Dict):
                 distances = [np.linalg.norm(current_pos_np - np.array(p)) for p in path]
                 current_idx = np.argmin(distances)
 
-                # Check the remainder of the path for obstructions
                 for i in range(current_idx, len(path) - 1):
                     if env.is_line_obstructed(path[i], path[i+1]):
                         _trigger_emergency_return(state, drone_id, "Path Invalidated by NFZ", planners)
-                        break # Path is bad, move to next drone
-
-    # Reset the flag after all drones have been checked for this tick
+                        break
+    
     if env.was_nfz_just_added:
         env.was_nfz_just_added = False

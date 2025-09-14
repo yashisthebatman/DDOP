@@ -1,12 +1,12 @@
 # FILE: environment.py
 import numpy as np
 from dataclasses import dataclass
-from typing import Tuple, List, Dict, Optional # <--- FIX: Added Optional here
+from typing import Tuple, List, Dict, Optional
 from opensimplex import OpenSimplex
 from rtree import index
 import logging
 
-from config import AREA_BOUNDS, MIN_ALTITUDE, MAX_ALTITUDE, NO_FLY_ZONES, HUBS, DESTINATIONS
+from config import AREA_BOUNDS, MIN_ALTITUDE, MAX_ALTITUDE, NO_FLY_ZONES, HUBS, DESTINATIONS, COARSE_GRID_RESOLUTION_M, GRID_VERTICAL_RESOLUTION_M
 from utils.geometry import line_segment_intersects_aabb
 from utils.coordinate_manager import CoordinateManager
 
@@ -209,4 +209,25 @@ class Environment:
                 max_gx, max_gy, max_gz = max_g
                 grid[max(0, min_gx):min(w, max_gx + 1), max(0, min_gy):min(h, max_gy + 1), max(0, min_gz):min(d, max_gz + 1)] = False
         logging.info("Planning grid created.")
+        return grid
+
+    def create_coarse_planning_grid(self) -> np.ndarray:
+        """Creates a lower-resolution grid for fast, high-level pathfinding."""
+        w = int(self.coord_manager.area_width_m / COARSE_GRID_RESOLUTION_M)
+        h = int(self.coord_manager.area_height_m / COARSE_GRID_RESOLUTION_M)
+        d = int((MAX_ALTITUDE - MIN_ALTITUDE) / GRID_VERTICAL_RESOLUTION_M)
+        grid = np.full((w, h, d), True)
+        
+        for bounds_m in self.obstacles.values():
+            min_mx, min_my, min_mz, max_mx, max_my, max_mz = bounds_m
+            min_gx = int(min_mx / COARSE_GRID_RESOLUTION_M)
+            min_gy = int(min_my / COARSE_GRID_RESOLUTION_M)
+            min_gz = int((min_mz - MIN_ALTITUDE) / GRID_VERTICAL_RESOLUTION_M)
+            max_gx = int(max_mx / COARSE_GRID_RESOLUTION_M)
+            max_gy = int(max_my / COARSE_GRID_RESOLUTION_M)
+            max_gz = int((max_mz - MIN_ALTITUDE) / GRID_VERTICAL_RESOLUTION_M)
+
+            grid[max(0, min_gx):min(w, max_gx + 1), 
+                 max(0, min_gy):min(h, max_gy + 1), 
+                 max(0, min_gz):min(d, max_gz + 1)] = False
         return grid

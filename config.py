@@ -11,6 +11,11 @@ TAKEOFF_ALTITUDE = 15.0
 # --- App Simulation Control ---
 SIMULATION_TIME_STEP = 0.5
 SIMULATION_UI_REFRESH_INTERVAL = 0.05
+# NEW: Configurable dispatch threshold
+MIN_ORDERS_TO_DISPATCH = 1
+# NEW: Concurrently running path planners
+MAX_CONCURRENT_PLANNERS = 4
+
 
 # --- ML Model and Retraining Configuration ---
 MODEL_FILE_PATH = "ml_predictor/drone_predictor_model.joblib"
@@ -20,10 +25,13 @@ RETRAINING_THRESHOLD = 20
 # --- Tactical Grid Configuration ---
 GRID_RESOLUTION_M = 15
 GRID_VERTICAL_RESOLUTION_M = 5
+# NEW: Resolution for the high-level strategic grid used by A*
+COARSE_GRID_RESOLUTION_M = 50
 
 # --- RRT* Strategic Planner ---
-RRT_STEP_SIZE_METERS = 100.0
-RRT_GOAL_BIAS = 0.1
+# MODIFIED: Tuned for corridor-based planning
+RRT_STEP_SIZE_METERS = 50.0
+RRT_GOAL_BIAS = 0.05
 RRT_NEIGHBORHOOD_RADIUS_METERS = 100.0
 
 # --- Hub Locations & Destinations ---
@@ -55,6 +63,7 @@ NO_FLY_ZONES = [
 
 # --- Drone & Physics ---
 DRONE_SPEED_MPS = 20.0
+# FIX: Removed the space in the variable name
 DRONE_VERTICAL_SPEED_MPS = 5.0
 DRONE_MAX_PAYLOAD_KG = 5.0
 DRONE_BATTERY_WH = 200.0
@@ -69,6 +78,9 @@ DRONE_RECHARGE_TIME_S = 30.0
 
 # --- Pathfinding Parameters ---
 MAX_PATH_LENGTH = 5000
+# NEW: Safety buffer for path smoothing
+PATH_SMOOTHING_OBSTACLE_CLEARANCE_METERS = 5.0
+
 
 # --- Delivery Maneuver ---
 DELIVERY_MANEUVER_TIME_SEC = 90 # 1.5 minutes for landing/lowering package

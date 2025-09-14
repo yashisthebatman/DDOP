@@ -6,6 +6,7 @@ from fleet.cbs_components import Agent
 from environment import Environment
 from utils.coordinate_manager import CoordinateManager
 import numpy as np
+from config import COARSE_GRID_RESOLUTION_M, GRID_VERTICAL_RESOLUTION_M, MIN_ALTITUDE
 
 @pytest.fixture
 def clear_env_and_coord_manager():
@@ -16,9 +17,12 @@ def clear_env_and_coord_manager():
     
     coord_manager = CoordinateManager()
     
-    # Mock the grid creation to return a fully open grid
-    grid_shape = (coord_manager.grid_width, coord_manager.grid_height, coord_manager.grid_depth)
-    env.create_planning_grid.return_value = np.full(grid_shape, True)
+    # FIX: Create a coarse grid with dimensions that match the real coord_manager
+    w = int(coord_manager.area_width_m / COARSE_GRID_RESOLUTION_M)
+    h = int(coord_manager.area_height_m / COARSE_GRID_RESOLUTION_M)
+    d = int((coord_manager.alt_max - MIN_ALTITUDE) / GRID_VERTICAL_RESOLUTION_M)
+    grid_shape = (w, h, d)
+    env.create_coarse_planning_grid.return_value = np.full(grid_shape, True)
     
     env.coord_manager = coord_manager
     return env, coord_manager
@@ -27,7 +31,9 @@ def clear_env_and_coord_manager():
 def real_planner(clear_env_and_coord_manager):
     """Provides a real, fully-functional hybrid planner instance."""
     env, coord_manager = clear_env_and_coord_manager
-    return CBSHPlanner(env, coord_manager)
+    planner = CBSHPlanner(env, coord_manager)
+    planner.coarse_planning_grid = env.create_coarse_planning_grid()
+    return planner
 
 def test_hybrid_planner_finds_path(real_planner):
     """
@@ -41,6 +47,5 @@ def test_hybrid_planner_finds_path(real_planner):
     assert 1 in solution and solution[1] is not None
     
     path = solution[1]
-    # Check that path starts and ends correctly (approximate due to float precision)
     assert np.allclose(path[0][0], agent1.start_pos, atol=1e-5)
     assert np.allclose(path[-1][0], agent1.goal_pos, atol=1e-5)

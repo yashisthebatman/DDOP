@@ -12,7 +12,7 @@ from environment import Environment
 from utils.rrt_star_anytime import AnytimeRRTStar
 from utils.path_timing_solver import PathTimingSolver
 from utils.geometry import calculate_distance_3d
-from config import DRONE_SPEED_MPS, MIN_ALTITUDE, MAX_ALTITUDE
+from config import DRONE_SPEED_MPS, MIN_ALTITUDE, MAX_ALTITUDE, COARSE_GRID_RESOLUTION_M, GRID_VERTICAL_RESOLUTION_M
 from utils.a_star import AStarPlanner
 
 LOW_LEVEL_TIME_BUDGET = 2.0
@@ -27,14 +27,18 @@ class CBSHPlanner:
         self.timing_solver = PathTimingSolver(coord_manager)
         self.agents_map: Dict[any, Agent] = {}
         self.a_star_planner = AStarPlanner()
+        # MODIFIED: Generate both fine and coarse grids on initialization
         self.planning_grid = self.env.create_planning_grid()
+        self.coarse_planning_grid = self.env.create_coarse_planning_grid()
 
     def plan_fleet(self, agents: List[Agent]) -> Optional[Dict]:
         self.agents_map = {agent.id: agent for agent in agents}
         root = CTNode()
         for agent in agents:
             timed_path = self._find_path_for_agent(agent, [])
-            if not timed_path: return None
+            if not timed_path: 
+                logging.error(f"Could not find an initial path for agent {agent.id}. Aborting fleet plan.")
+                return None
             root.solution[agent.id] = timed_path
         root.cost = self._calculate_solution_cost(root.solution)
         open_set = [root]
@@ -58,8 +62,7 @@ class CBSHPlanner:
                 if new_timed_path:
                     new_solution = p_node.solution.copy()
                     new_solution[agent_id_to_constrain] = new_timed_path
-                    if new_solution == p_node.solution:
-                        continue
+                    if new_solution == p_node.solution: continue
                     child = CTNode(constraints=new_constraints, solution=new_solution)
                     child.cost = self._calculate_solution_cost(child.solution)
                     heapq.heappush(open_set, child)
@@ -71,51 +74,48 @@ class CBSHPlanner:
         return None
 
     def _find_path_for_agent(self, agent: Agent, constraints: List[Constraint]) -> Optional[List[Tuple[Tuple, int]]]:
-        if self.env.is_point_obstructed(agent.start_pos):
-            logging.error(f"Could not plan for agent {agent.id}: Start point is obstructed.")
-            return None
-        if self.env.is_point_obstructed(agent.goal_pos):
-            logging.error(f"Could not plan for agent {agent.id}: Goal point is obstructed.")
+        if self.env.is_point_obstructed(agent.start_pos) or self.env.is_point_obstructed(agent.goal_pos):
+            logging.error(f"Agent {agent.id} start/goal is obstructed.")
             return None
             
         start_m = self.coord_manager.world_to_meters(agent.start_pos)
         goal_m = self.coord_manager.world_to_meters(agent.goal_pos)
-        start_grid, goal_grid = self.coord_manager.meters_to_grid(start_m), self.coord_manager.meters_to_grid(goal_m)
-        if not start_grid or not goal_grid:
-            logging.error(f"Agent {agent.id} start/goal is outside the planning grid.")
-            return None
         
-        strategic_grid_path = self.a_star_planner.find_path(self.planning_grid, start_grid, goal_grid)
-        if not strategic_grid_path:
-            logging.warning(f"CBSH: A* failed to find a strategic path for {agent.id}.")
-            return None
+        # --- NEW: Strategic planning on coarse grid to define a corridor ---
+        coarse_start_grid = (int(start_m[0] / COARSE_GRID_RESOLUTION_M), int(start_m[1] / COARSE_GRID_RESOLUTION_M), int((start_m[2] - MIN_ALTITUDE) / GRID_VERTICAL_RESOLUTION_M))
+        coarse_goal_grid = (int(goal_m[0] / COARSE_GRID_RESOLUTION_M), int(goal_m[1] / COARSE_GRID_RESOLUTION_M), int((goal_m[2] - MIN_ALTITUDE) / GRID_VERTICAL_RESOLUTION_M))
         
+        corridor_path_grid = self.a_star_planner.find_path(self.coarse_planning_grid, coarse_start_grid, coarse_goal_grid)
+        if not corridor_path_grid:
+            logging.warning(f"CBSH: A* failed to find a coarse strategic path for {agent.id}.")
+            return None
+
+        # Create waypoints from the coarse path to guide RRT*
         strategic_waypoints_world = [agent.start_pos]
-        for grid_pos in strategic_grid_path[1:-1:10]: 
-             strategic_waypoints_world.append(self.coord_manager.meters_to_world(self.coord_manager.grid_to_meters(grid_pos)))
+        for grid_pos in corridor_path_grid[1:-1:3]: # Sample every 3rd waypoint
+             coarse_meters = ((grid_pos[0] + 0.5) * COARSE_GRID_RESOLUTION_M, (grid_pos[1] + 0.5) * COARSE_GRID_RESOLUTION_M, (grid_pos[2] + 0.5) * GRID_VERTICAL_RESOLUTION_M + MIN_ALTITUDE)
+             strategic_waypoints_world.append(self.coord_manager.meters_to_world(coarse_meters))
         strategic_waypoints_world.append(agent.goal_pos)
         
+        # --- Tactical RRT* planning within segments of the corridor ---
         full_geometric_path = [strategic_waypoints_world[0]]
-        rrt_success = True
         for i in range(len(strategic_waypoints_world) - 1):
             p1, p2 = strategic_waypoints_world[i], strategic_waypoints_world[i+1]
-            rrt = AnytimeRRTStar(p1, p2, self.env, self.coord_manager)
-            p1_m, p2_m = self.coord_manager.world_to_meters(p1), self.coord_manager.world_to_meters(p2)
-            min_m, max_m = np.minimum(p1_m, p2_m), np.maximum(p1_m, p2_m)
-            buffer = 1500 
-            local_bounds = (min_m[0]-buffer, min_m[1]-buffer, MIN_ALTITUDE, max_m[0]+buffer, max_m[1]+buffer, MAX_ALTITUDE)
-
-            segment_path, status = rrt.plan(time_budget_s=LOW_LEVEL_TIME_BUDGET, custom_bounds_m=local_bounds)
-            
-            if not segment_path:
-                logging.warning(f"CBSH: RRT* failed on segment {i} for {agent.id}. Status: {status}. Planning will fall back to A* waypoints.")
-                rrt_success = False
-                break
-            
-            full_geometric_path.extend(segment_path[1:])
-        
-        if not rrt_success:
-            full_geometric_path = [self.coord_manager.meters_to_world(self.coord_manager.grid_to_meters(gp)) for gp in strategic_grid_path]
+            if self.env.is_line_obstructed(p1, p2):
+                rrt = AnytimeRRTStar(p1, p2, self.env, self.coord_manager)
+                p1_m, p2_m = self.coord_manager.world_to_meters(p1), self.coord_manager.world_to_meters(p2)
+                min_m, max_m = np.minimum(p1_m, p2_m), np.maximum(p1_m, p2_m)
+                buffer = COARSE_GRID_RESOLUTION_M * 2 # Buffer around the corridor segment
+                local_bounds = (min_m[0]-buffer, min_m[1]-buffer, MIN_ALTITUDE, max_m[0]+buffer, max_m[1]+buffer, MAX_ALTITUDE)
+                segment_path, status = rrt.plan(time_budget_s=LOW_LEVEL_TIME_BUDGET, custom_bounds_m=local_bounds)
+                
+                if not segment_path:
+                    logging.warning(f"CBSH: RRT* failed on segment {i} for {agent.id}. Status: {status}. Path may be suboptimal.")
+                    full_geometric_path.append(p2) # Fallback to A* waypoint
+                else:
+                    full_geometric_path.extend(segment_path[1:])
+            else:
+                full_geometric_path.append(p2) # Path is clear, no RRT* needed
 
         timed_path = self.timing_solver.find_timing(full_geometric_path, constraints)
         if not timed_path:

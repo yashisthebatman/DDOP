@@ -1,5 +1,7 @@
 # FILE: fleet/manager.py
 import logging
+import queue
+import threading
 from typing import Dict, List, Tuple
 from fleet.cbs_components import Agent
 from planners.cbsh_planner import CBSHPlanner
@@ -49,97 +51,87 @@ class Mission:
             'current_stop_index': self.current_stop_index,
             'mission_time_elapsed': self.mission_time_elapsed,
             'flight_time_elapsed': self.flight_time_elapsed,
-            'total_maneuver_time': 0
+            'total_maneuver_time': 0,
+            'current_path_target_index': 1 
         }
 
 class FleetManager:
-    def __init__(self, cbs_planner: CBSHPlanner, predictor: EnergyTimePredictor):
+    def __init__(self, cbs_planner: CBSHPlanner, predictor: EnergyTimePredictor, state_lock: threading.Lock):
         self.cbs_planner = cbs_planner
         self.predictor = predictor
+        self.state_lock = state_lock
+        self.planning_queue = queue.PriorityQueue()
+
+    def add_mission_to_queue(self, mission: Mission):
+        is_high_priority = any(o.get('high_priority', False) for o in mission.stops)
+        priority = 0 if is_high_priority else 1
+        self.planning_queue.put((priority, mission))
+        logging.info(f"Enqueued mission {mission.mission_id} with priority {priority}.")
 
     def plan_pending_missions(self, state: Dict) -> Tuple[bool, Dict]:
-        """
-        Finds all drones in 'PLANNING' state, runs the CBSH planner, and
-        returns a dictionary of updates to be applied to the main state, rather
-        than modifying the state directly. This makes it thread-safe.
-        """
-        missions_to_plan = []
-        drones_in_planning = []
-        for drone_id, drone in state['drones'].items():
-            if drone['status'] == 'PLANNING':
-                mission_id = drone.get('mission_id')
-                if mission_id and mission_id in state['active_missions']:
-                    missions_to_plan.append(state['active_missions'][mission_id])
-                    drones_in_planning.append(drone_id)
+        try:
+            _, mission = self.planning_queue.get_nowait()
+        except queue.Empty:
+            return True, {}
 
-        if not missions_to_plan:
-            return True, {"message": "No missions in PLANNING state."}
+        mission_id = mission.mission_id
+        drone_id = mission.drone_id
 
-        active_agents: List[Agent] = [
-            Agent(id=m['drone_id'], start_pos=m['start_pos'], goal_pos=m['destinations'][-1], config={'payload_kg': m['payload_kg']})
-            for m in missions_to_plan
-        ]
+        with self.state_lock:
+            if state['drones'][drone_id]['status'] != 'IDLE':
+                logging.warning(f"Drone {drone_id} is no longer IDLE. Aborting planning for {mission_id}.")
+                return False, {"mission_failures": [mission_id]}
+            
+            # THIS IS THE KEY CHANGE: Add the full mission object to active_missions first.
+            # The updates will be MERGED into this object later.
+            state['active_missions'][mission_id] = mission.to_dict()
+            state['drones'][drone_id]['status'] = 'PLANNING'
+            state['drones'][drone_id]['mission_id'] = mission_id
         
-        if not active_agents:
-            return True, {"message": "No active agents to plan for."}
-
-        logging.info(f"FleetManager initiating CBSH planning for {len(active_agents)} agents.")
-        solution = self.cbs_planner.plan_fleet(active_agents)
+        active_agent = Agent(id=drone_id, start_pos=mission.start_pos, goal_pos=mission.destinations[-1], config={'payload_kg': mission.payload_kg})
+        
+        logging.info(f"FleetManager initiating CBSH planning for agent {drone_id} on mission {mission_id}.")
+        solution = self.cbs_planner.plan_fleet([active_agent])
 
         drone_updates = {}
         mission_updates = {}
-        successful_mission_ids = []
-        mission_failures = []
         
-        if not solution:
-            logging.error("CBSH planning FAILED for the fleet.")
-            for agent_id in drones_in_planning:
-                drone_updates[agent_id] = {'status': 'IDLE', 'mission_id': None}
-                mission_id = state['drones'][agent_id].get('mission_id')
-                if mission_id: mission_failures.append(mission_id)
-            return False, {"drone_updates": drone_updates, "mission_failures": mission_failures, "error": "CBS could not find a solution."}
+        if not solution or drone_id not in solution or not solution[drone_id]:
+            logging.error(f"CBSH planning FAILED for agent {drone_id} on mission {mission_id}.")
+            drone_updates[drone_id] = {'status': 'IDLE', 'mission_id': None}
+            return False, {"drone_updates": drone_updates, "mission_failures": [mission_id], "error": "CBS could not find a solution."}
 
-        logging.info("CBSH planning successful. Preparing mission updates.")
+        logging.info(f"CBSH planning successful for {drone_id}. Preparing mission updates.")
         
-        solved_agents = set(solution.keys())
-        for agent_id, path in solution.items():
-            drone = state['drones'][agent_id]
-            mission_id = drone['mission_id']
-            mission = state['active_missions'][mission_id]
-
-            world_path = [p[0] for p in path]
-            smoothed_path = self.cbs_planner.smoother.smooth_path(world_path, self.cbs_planner.env)
+        path = solution[drone_id]
+        world_path = [p[0] for p in path]
+        smoothed_path = self.cbs_planner.smoother.smooth_path(world_path, self.cbs_planner.env)
+        
+        total_energy = 0
+        if path and len(path) > 1:
+            # Re-get the mission object from the main state to ensure we have the latest version
+            mission_dict = state['active_missions'][mission_id]
+            for i in range(len(world_path) - 1):
+                p1, p2 = world_path[i], world_path[i+1]
+                wind = self.cbs_planner.env.weather.get_wind_at_location(*p1)
+                _, energy_pred = self.predictor.predict(p1, p2, mission_dict['payload_kg'], wind, world_path[i-1] if i>0 else None)
+                total_energy += energy_pred
             
-            total_energy = 0
-            if path and len(path) > 1:
-                for i in range(len(world_path) - 1):
-                    p1, p2 = world_path[i], world_path[i+1]
-                    wind = self.cbs_planner.env.weather.get_wind_at_location(*p1)
-                    _, energy_pred = self.predictor.predict(p1, p2, mission['payload_kg'], wind, world_path[i-1] if i>0 else None)
-                    total_energy += energy_pred
-                
-                num_stops = len(mission.get('stops', []))
-                total_maneuver_time = num_stops * DELIVERY_MANEUVER_TIME_SEC
-                flight_time = path[-1][1]
-                
-                mission_updates[mission_id] = {
-                    'path_world_coords': smoothed_path,
-                    'total_planned_energy': total_energy,
-                    'total_planned_time': flight_time + total_maneuver_time,
-                    'total_maneuver_time': total_maneuver_time,
-                    'start_time': state['simulation_time'],
-                    'start_battery': drone['battery']
-                }
-                drone_updates[agent_id] = {'status': 'EN ROUTE'}
-                successful_mission_ids.append(mission_id)
-            else:
-                drone_updates[agent_id] = {'status': 'IDLE', 'mission_id': None}
-                mission_failures.append(mission_id)
-
-        unsolved_agents = [agent_id for agent_id in drones_in_planning if agent_id not in solved_agents]
-        for agent_id in unsolved_agents:
-            drone_updates[agent_id] = {'status': 'IDLE', 'mission_id': None}
-            mission_id = state['drones'][agent_id].get('mission_id')
-            if mission_id: mission_failures.append(mission_id)
+            num_stops = len(mission_dict.get('stops', []))
+            total_maneuver_time = num_stops * DELIVERY_MANEUVER_TIME_SEC
+            flight_time = path[-1][1]
             
-        return True, {"drone_updates": drone_updates, "mission_updates": mission_updates, "successful_mission_ids": successful_mission_ids, "mission_failures": mission_failures}
+            mission_updates[mission_id] = {
+                'path_world_coords': smoothed_path,
+                'total_planned_energy': total_energy,
+                'total_planned_time': flight_time + total_maneuver_time,
+                'total_maneuver_time': total_maneuver_time,
+                'start_time': state['simulation_time'],
+                'start_battery': state['drones'][drone_id]['battery'],
+                'current_path_target_index': 1
+            }
+            drone_updates[drone_id] = {'status': 'EN ROUTE'}
+            return True, {"drone_updates": drone_updates, "mission_updates": mission_updates, "successful_mission_ids": [mission_id]}
+        else:
+            drone_updates[drone_id] = {'status': 'IDLE', 'mission_id': None}
+            return False, {"drone_updates": drone_updates, "mission_failures": [mission_id]}
