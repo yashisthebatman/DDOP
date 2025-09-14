@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
     predictor = EnergyTimePredictor(); predictor.load_model()
     cbsh_planner = CBSHPlanner(env, coord_manager)
     fleet_manager = FleetManager(cbsh_planner, predictor, state_lock)
-    dispatcher = Dispatcher(fleet_manager)
+    dispatcher = Dispatcher(fleet_manager, predictor)
     planners.update({
         'coord_manager': coord_manager, 'env': env, 'predictor': predictor,
         'dispatcher': dispatcher, 'fleet_manager': fleet_manager,
@@ -119,7 +119,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# ... (update_simulation logic is unchanged from the last correct version) ...
 def update_simulation(state, planners):
     state['simulation_time'] += SIMULATION_TIME_STEP
     coord_manager = planners['coord_manager']
@@ -135,6 +134,7 @@ def update_simulation(state, planners):
         drone_id = mission['drone_id']
         drone = state['drones'][drone_id]
         if 'current_path_target_index' not in mission: mission['current_path_target_index'] = 1
+        
         if drone['status'] == 'PERFORMING_DELIVERY':
             if state['simulation_time'] >= mission.get('maneuver_complete_at', float('inf')):
                 mission['current_stop_index'] += 1
@@ -145,6 +145,7 @@ def update_simulation(state, planners):
                 else:
                     drone['status'] = 'EN ROUTE'
             continue 
+        
         elif drone['status'] == 'AVOIDING':
             target_pos = np.array(drone.get('avoidance_target_pos', drone['pos']))
             current_pos = np.array(drone['pos'])
@@ -158,9 +159,11 @@ def update_simulation(state, planners):
                 move_vec = (direction / distance) * DRONE_VERTICAL_SPEED_MPS * SIMULATION_TIME_STEP
                 drone['pos'] = tuple((current_pos + move_vec).tolist())
             continue
+        
         elif drone['status'] in ['EN ROUTE', 'RETURNING_TO_HUB', 'EMERGENCY_RETURN']:
             path = mission.get('path_world_coords', [])
             if not path or mission['current_path_target_index'] >= len(path): continue
+
             target_waypoint = np.array(path[mission['current_path_target_index']])
             current_pos_np = np.array(drone['pos'])
             direction = target_waypoint - current_pos_np
@@ -171,36 +174,45 @@ def update_simulation(state, planners):
                 mission['current_path_target_index'] += 1
             else:
                 drone['pos'] = tuple((current_pos_np + (direction / dist_to_wp) * move_dist).tolist())
-            has_deliveries = len(mission.get('stops', [])) > 0
-            is_returning = drone['status'] in ['RETURNING_TO_HUB', 'EMERGENCY_RETURN']
-            if drone['status'] == 'EN ROUTE' and has_deliveries:
+
+            if drone['status'] == 'EN ROUTE':
                 stop_idx = mission.get('current_stop_index', 0)
-                delivery_pos = mission['stops'][stop_idx]['pos']
-                dist_to_delivery = calculate_distance_3d(coord_manager.world_to_meters(drone['pos']), coord_manager.world_to_meters(delivery_pos))
-                if dist_to_delivery < 5.0:
-                    drone['status'] = 'PERFORMING_DELIVERY'
-                    mission['maneuver_complete_at'] = state['simulation_time'] + DELIVERY_MANEUVER_TIME_SEC
-            elif is_returning or (drone['status'] == 'EN ROUTE' and not has_deliveries):
+                if 0 <= stop_idx < len(mission.get('stops', [])):
+                    delivery_pos = mission['stops'][stop_idx]['pos']
+                    dist_to_delivery = calculate_distance_3d(coord_manager.world_to_meters(drone['pos']), coord_manager.world_to_meters(delivery_pos))
+                    if dist_to_delivery < 5.0:
+                        drone['status'] = 'PERFORMING_DELIVERY'
+                        mission['maneuver_complete_at'] = state['simulation_time'] + DELIVERY_MANEUVER_TIME_SEC
+                        continue
+
+            is_final_leg = drone['status'] in ['RETURNING_TO_HUB', 'EMERGENCY_RETURN'] or \
+                           (drone['status'] == 'EN ROUTE' and not mission.get('stops'))
+
+            if is_final_leg:
                 hub_pos = mission['destinations'][-1]
                 dist_to_hub = calculate_distance_3d(coord_manager.world_to_meters(drone['pos']), coord_manager.world_to_meters(hub_pos))
                 if dist_to_hub < 5.0:
                     missions_to_complete.append(mission_id)
                     continue
+            
             mission['flight_time_elapsed'] += SIMULATION_TIME_STEP
             flight_time = max(1, mission.get('total_planned_time', 1))
             progress = min(1.0, mission['flight_time_elapsed'] / flight_time)
             drone['battery'] = mission.get('start_battery', DRONE_BATTERY_WH) - (progress * mission.get('total_planned_energy', 0))
+
     for mission_id in missions_to_complete:
         mission = state.get('active_missions', {}).get(mission_id)
         if not mission: continue
         drone_id = mission['drone_id']
         drone = state['drones'][drone_id]
+        
         if drone['status'] != 'EMERGENCY_RETURN':
             actual_duration = state['simulation_time'] - mission.get('start_time', 0)
             actual_energy = mission.get('start_battery', DRONE_BATTERY_WH) - drone['battery']
             state['completed_missions_log'].append({"mission_id": mission_id, "drone_id": drone_id, "completion_timestamp": float(state['simulation_time']), "planned_duration_sec": float(mission.get('total_planned_time', 0)), "actual_duration_sec": float(actual_duration), "planned_energy_wh": float(mission.get('total_planned_energy', 0)), "actual_energy_wh": float(actual_energy), "number_of_stops": len(mission.get('stops', [])), "outcome": "Completed"})
             [state['completed_orders'].append(oid) for oid in mission.get('order_ids', []) if oid not in state['completed_orders']]
             state['completed_missions'][mission_id] = mission
+            
         end_hub_id = mission.get('end_hub')
         if end_hub_id:
             end_hub_obj = get_hub_by_id(end_hub_id)
@@ -208,25 +220,44 @@ def update_simulation(state, planners):
                 drone['home_hub'] = end_hub_id
                 hub_pos = end_hub_obj['location']
                 drone['pos'] = (float(hub_pos[0]), float(hub_pos[1]), float(hub_pos[2]))
+        
         drone['status'] = 'RECHARGING'
         drone['mission_id'] = None
         drone['available_at'] = state['simulation_time'] + DRONE_RECHARGE_TIME_S
+        
         if mission_id in state['active_missions']: del state['active_missions'][mission_id]
 
 async def broadcast_state():
     if connected_clients:
         state_snapshot = {}
+        plotly_data = None
         with state_lock:
             state_snapshot = json.loads(json.dumps(state, cls=system_state.NumpyJSONEncoder))
-        full_message = {'simulation_state': state_snapshot, 'drone_list': list(state_snapshot.get('drones', {}).values())}
+            if planners:
+                plotly_data = generate_plotly_data(state, planners['coord_manager'], planners['env'])
+
+        full_message = {
+            'simulation_state': state_snapshot,
+            'drone_list': list(state_snapshot.get('drones', {}).values()),
+            'plotly_data': plotly_data
+        }
         state_json = json.dumps(full_message)
-        await asyncio.gather(*[client.send_text(state_json) for client in connected_clients])
+
+        disconnected_clients = set()
+        for client in connected_clients:
+            try:
+                await client.send_text(state_json)
+            except RuntimeError:
+                disconnected_clients.add(client)
+        
+        for client in disconnected_clients:
+            connected_clients.remove(client)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept(); connected_clients.add(websocket)
     try:
-        await broadcast_state() # Send initial full state
+        await broadcast_state() 
         while True:
             data = await websocket.receive_json()
             command, payload = data.get("type"), data.get("payload")
@@ -244,6 +275,8 @@ async def websocket_endpoint(websocket: WebSocket):
                             state['pending_orders'][order_id] = order
                 elif command == "reset_simulation":
                     state.update(system_state.reset_state_file())
+                elif command == "toggle_simulation":
+                    state['simulation_running'] = not state.get('simulation_running', False)
             if response_message:
                 await websocket.send_text(json.dumps(response_message))
             await broadcast_state()
@@ -267,8 +300,9 @@ async def simulation_loop():
                             for mid, updates in results.get('mission_updates', {}).items():
                                 if mid in state['active_missions']: state['active_missions'][mid].update(updates)
                             for mid in results.get('successful_mission_ids', []):
-                                for oid in state['active_missions'][mid]['order_ids']:
-                                    if oid in state['pending_orders']: del state['pending_orders'][oid]
+                                if mid in state['active_missions']:
+                                    for oid in state['active_missions'][mid]['order_ids']:
+                                        if oid in state['pending_orders']: del state['pending_orders'][oid]
                         else:
                             state['drones'].update(results.get('drone_updates', {}))
                             for mid in results.get('mission_failures', []):

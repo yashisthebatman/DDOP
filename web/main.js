@@ -1,6 +1,7 @@
 // FILE: web/main.js
 
 let plotInitialized = false;
+const plotContainer = document.getElementById('plotContainer');
 const socket = new WebSocket(`ws://${window.location.host}/ws`);
 
 socket.onopen = () => console.log("WebSocket connection established.");
@@ -16,11 +17,31 @@ socket.onmessage = (event) => {
     }
 
     if (message.simulation_state) {
-        if (!plotInitialized) {
-            // Plotly is now data-driven and initialized via the main state update
-            plotInitialized = true;
-        }
         updateUI(message);
+        
+        // FIX: Update the 3D plot with data from the server
+        if (message.plotly_data) {
+            if (!plotInitialized) {
+                const layout = {
+                    title: 'Drone Operations - 3D View',
+                    showlegend: true,
+                    scene: {
+                        xaxis: { title: 'X (meters)' },
+                        yaxis: { title: 'Y (meters)' },
+                        zaxis: { title: 'Z (meters - Altitude)' },
+                        aspectmode: 'data'
+                    },
+                    margin: { l: 0, r: 0, b: 0, t: 40 },
+                    paper_bgcolor: 'rgba(0,0,0,0)',
+                    plot_bgcolor: 'rgba(0,0,0,0)',
+                    font: { color: '#e0e0e0' }
+                };
+                Plotly.newPlot(plotContainer, message.plotly_data, layout);
+                plotInitialized = true;
+            } else {
+                Plotly.react(plotContainer, message.plotly_data);
+            }
+        }
     }
 };
 
@@ -52,16 +73,17 @@ function updateUI(message) {
     document.getElementById('ordersPending').textContent = Object.keys(state.pending_orders).length;
     document.getElementById('ordersCompleted').textContent = state.completed_orders.length;
 
-    const runPauseButton = document.getElementById('runPauseButton');
-    runPauseButton.textContent = state.simulation_running ? '⏸️ Pause' : '▶ Run';
+    const runPauseButton = document.getElementById('toggleSimulationButton');
+    runPauseButton.textContent = state.simulation_running ? '⏸️ Pause Sim' : '▶ Run Sim';
     runPauseButton.className = state.simulation_running ? 'pause' : 'run';
 
     updateDroneStatusList(drones);
     updatePendingOrdersTable(Object.values(state.pending_orders || {}));
-    updateMissionLog(state.completed_missions_log || []);
+    updateCompletedMissionsTable(state.completed_missions_log || []); // NEW
+    updateEventLog(state.log || []);
 }
 
-let HUBS_BY_ID = {}; // Global store for hub data
+let HUBS_BY_ID = {};
 
 function updateDroneStatusList(drones) {
     const container = document.getElementById('droneStatusContainer');
@@ -105,26 +127,48 @@ function updatePendingOrdersTable(orders) {
                 <td>${order.id.split('-')[1]}</td>
                 <td>${order.dest_name}</td>
                 <td>${order.payload_kg.toFixed(1)}kg</td>
-                <td>${order.high_priority ? 'High' : 'Normal'}</td>
+                <td>${order.high_priority ? '✅' : 'No'}</td>
             </tr>
         `;
     }
     tableBody.innerHTML = html;
 }
 
-function updateMissionLog(log) {
+// NEW: Function to update the completed missions table
+function updateCompletedMissionsTable(missions) {
+    const tableBody = document.querySelector("#completedMissionsTable tbody");
+    if (missions.length === 0) {
+        tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center;">No completed missions</td></tr>`;
+        return;
+    }
+    const reversedMissions = [...missions].reverse().slice(0, 20); // Show last 20
+    let html = '';
+    for (const mission of reversedMissions) {
+        const outcomeClass = mission.outcome.startsWith('Failed') ? 'log-fail' : 'log-success';
+        html += `
+            <tr>
+                <td>${mission.drone_id}</td>
+                <td>${mission.number_of_stops}</td>
+                <td class="${outcomeClass}">${mission.outcome}</td>
+                <td>${mission.actual_duration_sec.toFixed(0)}s</td>
+            </tr>
+        `;
+    }
+    tableBody.innerHTML = html;
+}
+
+function updateEventLog(log) {
     const container = document.getElementById('logContainer');
     const reversedLog = [...log].reverse().slice(0, 50);
     container.innerHTML = reversedLog.map(entry => {
-        const time = new Date(entry.completion_timestamp * 1000).toISOString().substr(11, 8);
-        const outcomeClass = entry.outcome.startsWith('Failed') ? 'log-fail' : 'log-success';
-        return `<div class="${outcomeClass}">[${time}] ${entry.drone_id} - Mission ${entry.mission_id.split('-')[1]} - ${entry.outcome}</div>`;
+        const isFail = entry.includes('⚠️') || entry.includes('CRITICAL') || entry.includes('Failed');
+        const entryClass = isFail ? 'log-fail' : 'log-success';
+        return `<div class="${entryClass}">${entry}</div>`;
     }).join('');
 }
 
-
 function setupEventListeners() {
-    document.getElementById('runPauseButton').addEventListener('click', () => sendCommand('toggle_simulation'));
+    document.getElementById('toggleSimulationButton').addEventListener('click', () => sendCommand('toggle_simulation'));
     document.getElementById('resetButton').addEventListener('click', () => {
         if (confirm("Are you sure? This will reset all simulation progress.")) {
             sendCommand('reset_simulation');

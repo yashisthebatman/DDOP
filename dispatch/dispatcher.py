@@ -5,36 +5,27 @@ from typing import Dict, Any, List, Optional
 import numpy as np
 
 from fleet.manager import Mission, FleetManager
-from config import HUBS
+# FIX: Import the new safety margin config
+from config import HUBS, RTH_BATTERY_THRESHOLD_FACTOR, DISPATCH_ENERGY_SAFETY_MARGIN
 from utils.geometry import calculate_distance_3d
+from ml_predictor.predictor import EnergyTimePredictor
+from utils.coordinate_manager import CoordinateManager
 
-# Helper function to find a hub by its ID
 def get_hub_by_id(hub_id: str) -> Optional[Dict]:
     for hub in HUBS:
         if hub['id'] == hub_id:
             return hub
     return None
 
-class DroneEnergyPredictor:
-    """A simple heuristic-based energy predictor."""
-    # Rough estimate: Joules per meter, converted to Watt-hours
-    # (1 Wh = 3600 Joules). This factor can be replaced by a real model.
-    ENERGY_FACTOR_WH_PER_METER = 0.01
-
-    def predict_round_trip_energy(self, start_hub_pos: tuple, dest_pos: tuple) -> float:
-        """Estimates the energy for a hub -> destination -> hub round trip."""
-        one_way_dist_m = calculate_distance_3d(start_hub_pos, dest_pos)
-        round_trip_dist_m = one_way_dist_m * 2
-        return round_trip_dist_m * self.ENERGY_FACTOR_WH_PER_METER
-
 class Dispatcher:
     """
     Handles individual order dispatching, including energy prediction,
     "smart" drone selection, and mission creation.
     """
-    def __init__(self, fleet_manager: FleetManager):
+    def __init__(self, fleet_manager: FleetManager, predictor: EnergyTimePredictor):
         self.fleet_manager = fleet_manager
-        self.energy_predictor = DroneEnergyPredictor()
+        self.predictor = predictor
+        self.coord_manager = CoordinateManager()
 
     def _get_eligible_drones_at_hub(self, state: Dict[str, Any], hub_id: str) -> List[Dict]:
         """Finds all IDLE drones at a specific hub."""
@@ -45,17 +36,12 @@ class Dispatcher:
 
     def _score_drone(self, drone: Dict, proximity_dist_m: float) -> float:
         """Calculates a score for a drone based on multiple factors."""
-        # Weights can be tuned
         battery_weight = 0.5
         health_weight = 0.4
         proximity_weight = 0.1
-
-        # Normalize values to be roughly 0-1
         norm_battery = drone.get('battery', 0) / 200.0
         norm_health = drone.get('battery_health', 0) / 100.0
-        # Inverse proximity: closer is better. Add 1 to avoid division by zero.
         norm_proximity = 1 / (1 + proximity_dist_m)
-        
         score = (
             (norm_battery * battery_weight) +
             (norm_health * health_weight) +
@@ -72,44 +58,42 @@ class Dispatcher:
         if not start_hub:
             return "error_hub_not_found"
         
-        # 1. Predict energy for the round trip
-        required_energy = self.energy_predictor.predict_round_trip_energy(
-            start_hub['location'], order['pos']
-        )
+        _, outbound_energy = self.predictor.predict(start_hub['location'], order['pos'], order['payload_kg'], [0,0,0], None)
+        _, return_energy = self.predictor.predict(order['pos'], start_hub['location'], 0, [0,0,0], None)
+        
+        required_energy = (outbound_energy + return_energy) * RTH_BATTERY_THRESHOLD_FACTOR * DISPATCH_ENERGY_SAFETY_MARGIN
 
-        # 2. Find and score eligible drones
         eligible_drones = self._get_eligible_drones_at_hub(state, hub_id)
         drones_with_enough_battery = [d for d in eligible_drones if d['battery'] > required_energy]
 
         if not drones_with_enough_battery:
-            logging.warning(f"Order {order['id']} is out of range for all drones at {hub_id}.")
+            logging.warning(f"Order {order['id']} out of range for all drones at {hub_id}. Required: {required_energy:.2f}Wh")
             return "out_of_range"
         
-        # 3. Perform "smart" selection
         scored_drones = []
         for drone in drones_with_enough_battery:
-            proximity = calculate_distance_3d(drone['pos'], order['pos'])
+            drone_pos_m = self.coord_manager.world_to_meters(drone['pos'])
+            order_pos_m = self.coord_manager.world_to_meters(order['pos'])
+            proximity = calculate_distance_3d(drone_pos_m, order_pos_m)
             score = self._score_drone(drone, proximity)
             scored_drones.append((score, drone))
         
-        # Sort by score descending (highest score is best)
-        scored_drones.sort(key=lambda x: x[0], reverse=True)
+        scored_drones.sort(key=lambda x: (-x[0], x[1]['id']))
         best_drone = scored_drones[0][1]
         best_drone_id = best_drone['id']
         
-        # 4. Create and enqueue the mission
         mission_id = f"M-{uuid.uuid4().hex[:6]}"
         mission_obj = Mission(
             mission_id=mission_id,
             drone_id=best_drone_id, 
             start_pos=best_drone['pos'],
-            destinations=[order['pos'], start_hub['location']], # Delivery -> Return
+            destinations=[order['pos'], start_hub['location']],
             payload_kg=order['payload_kg'],
             order_ids=[order['id']]
         )
         mission_obj.stops = [order]
         mission_obj.start_hub = hub_id
-        mission_obj.end_hub = hub_id # Simple missions return to the same hub
+        mission_obj.end_hub = hub_id
 
         self.fleet_manager.add_mission_to_queue(mission_obj)
         logging.info(f"Dispatched order {order['id']} to drone {best_drone_id} from {hub_id}.")
@@ -122,9 +106,7 @@ class Dispatcher:
             logging.warning(f"Rebalancing requested from {from_hub_id}, but no drones are available.")
             return
 
-        # Pick the drone with the most charge cycles (the "most used" one)
         drone_to_move = max(eligible_drones, key=lambda d: d.get('charge_cycles', 0))
-        
         from_hub = get_hub_by_id(from_hub_id)
         to_hub = get_hub_by_id(to_hub_id)
         
@@ -138,7 +120,7 @@ class Dispatcher:
         )
         mission_obj.start_hub = from_hub_id
         mission_obj.end_hub = to_hub_id
-        mission_obj.stops = [] # No delivery stops
+        mission_obj.stops = []
 
         self.fleet_manager.add_mission_to_queue(mission_obj)
         logging.info(f"Created rebalancing mission for {drone_to_move['id']} from {from_hub_id} to {to_hub_id}.")

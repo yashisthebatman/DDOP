@@ -17,7 +17,8 @@
             <div id="simTime">Sim Time: 0.0s</div>
         </div>
         <div class="controls">
-            <button id="runPauseButton" class="run">▶ Run</button>
+            <!-- FIX: Removed the redundant runPauseButton and kept the correctly named toggleSimulationButton -->
+            <button id="toggleSimulationButton" class="run">▶ Run Sim</button>
             <button id="resetButton" class="danger">⚠️ Reset</button>
         </div>
         <div class="metrics">
@@ -55,8 +56,17 @@
                 </table>
             </div>
         </div>
+        <div class="content-section">
+            <h2>Completed Missions</h2>
+            <div class="table-container">
+                <table id="completedMissionsTable">
+                    <thead><tr><th>Drone</th><th>Stops</th><th>Outcome</th><th>Duration</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
         <div class="content-section log-section">
-            <h2>Mission Log</h2>
+            <h2>Event Log</h2>
             <div id="logContainer">
                 </div>
         </div>

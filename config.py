@@ -13,7 +13,9 @@ SIMULATION_TIME_STEP = 0.5
 SIMULATION_UI_REFRESH_INTERVAL = 0.05
 MIN_ORDERS_TO_DISPATCH = 1
 MAX_CONCURRENT_PLANNERS = 4
-DRONES_PER_HUB = 5 # NEW
+DRONES_PER_HUB = 5
+# NEW: Add a safety margin to pre-flight energy checks to account for unknown pathing/wind.
+DISPATCH_ENERGY_SAFETY_MARGIN = 1.2 # (20% buffer)
 
 # --- ML Model and Retraining Configuration ---
 MODEL_FILE_PATH = "ml_predictor/drone_predictor_model.joblib"
@@ -31,7 +33,6 @@ RRT_GOAL_BIAS = 0.05
 RRT_NEIGHBORHOOD_RADIUS_METERS = 100.0
 
 # --- Hub Locations & Destinations ---
-# MODIFIED: HUBS is now a list of dictionaries for more structured data.
 HUBS = [
     {"id": "HUB_A", "name": "Hub A (South Manhattan)", "location": (-74.018, 40.705, 10.0)},
     {"id": "HUB_B", "name": "Hub B (Midtown East)", "location": (-73.975, 40.729, 10.0)},

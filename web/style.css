@@ -36,7 +36,7 @@ h2 { font-size: 1.1em; color: var(--accent-color); margin-bottom: 10px; margin-t
 .metric-item { background-color: rgba(51, 51, 51, 0.8); padding: 10px; border-radius: 5px; text-align: center; }
 .metric-item .label { display: block; font-size: 0.8em; color: var(--text-muted); }
 .metric-item .value { display: block; font-size: 1.6em; font-weight: 600; }
-.controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+.controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; } /* FIX: Changed back to 2 columns */
 button { padding: 10px; border: none; border-radius: 5px; background-color: var(--border-color); color: var(--text-color); font-size: 1em; cursor: pointer; transition: background-color 0.2s; }
 button:hover { background-color: #555; }
 button.run { background-color: var(--run-color); }
@@ -48,9 +48,11 @@ button[type="submit"] { background-color: var(--accent-color); }
 .content-section { padding-top: 15px; border-top: 1px solid var(--border-color); }
 .content-section:first-child { padding-top: 0; border-top: none; }
 #leftPanel .content-section { margin-bottom: 15px; }
-#rightPanel .content-section { margin-bottom: 15px; }
+#rightPanel .content-section { margin-bottom: 15px; flex-shrink: 0; }
 .log-section, .drone-status-section { flex-grow: 1; display: flex; flex-direction: column; min-height: 0; }
-.table-container { overflow-y: auto; flex-grow: 1; }
+.table-container { overflow-y: auto; flex-grow: 1; max-height: 200px; }
+#rightPanel .log-section .table-container { max-height: none; }
+
 
 /* Add Order Form */
 #addOrderForm { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center; }
@@ -62,25 +64,32 @@ select, input[type="number"] { width: 100%; padding: 8px; background-color: #333
 /* Drone Status List */
 .hub-header { font-weight: bold; color: var(--accent-color); margin-top: 10px; padding-bottom: 5px; border-bottom: 1px solid #555; }
 .drone-item { display: flex; align-items: center; padding: 4px 0; font-size: 0.9em; }
-.drone-icon { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+.drone-icon { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; flex-shrink: 0; }
 .drone-icon.idle { background-color: var(--run-color); }
-.drone-icon.en-route, .drone-icon.returning-to-hub, .drone-icon.emergency-return { background-color: var(--info-color); }
-.drone-icon.performing-delivery { background-color: var(--pause-color); }
+.drone-icon.en-route, .drone-icon.returning-to-hub, .drone-icon.emergency-return { background-color: var(--info-color); animation: pulse 2s infinite; }
+.drone-icon.performing-delivery { background-color: var(--pause-color); animation: pulse 1s infinite; }
 .drone-icon.recharging { background-color: #777; }
-.drone-icon.avoiding { background-color: var(--danger-color); }
+.drone-icon.avoiding { background-color: var(--danger-color); animation: pulse 0.5s infinite; }
+.drone-icon.critical-failure { background-color: var(--danger-color); }
 .drone-name { width: 80px; font-weight: bold; }
-.drone-status { width: 120px; }
+.drone-status { width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .battery-bar { flex-grow: 1; height: 12px; background-color: #444; border-radius: 3px; overflow: hidden; }
 .battery-fill { height: 100%; background-color: var(--run-color); transition: width 0.5s ease; }
+
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+
 
 /* Tables */
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 6px; text-align: left; border-bottom: 1px solid var(--border-color); font-size: 0.9em; }
 th { color: var(--text-muted); }
+td.log-fail { color: var(--danger-color); }
+td.log-success { color: var(--text-color); }
 
-/* Mission Log */
-#logContainer { background-color: rgba(17, 17, 17, 0.8); padding: 10px; border-radius: 5px; font-family: 'Courier New', Courier, monospace; font-size: 0.85em; overflow-y: auto; }
+
+/* Event Log */
+#logContainer { background-color: rgba(17, 17, 17, 0.8); padding: 10px; border-radius: 5px; font-family: 'Courier New', Courier, monospace; font-size: 0.85em; overflow-y: auto; flex-grow: 1; }
 #logContainer div { padding: 2px 0; border-bottom: 1px solid #2a2a2e; }
 #logContainer div:last-child { border-bottom: none; }
 .log-success { color: #aaa; }
-.log-fail { color: var(--danger-color); }
+.log-fail { color: var(--danger-color); font-weight: bold;}

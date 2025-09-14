@@ -14,24 +14,31 @@ class PathSmoother:
         Generates a smooth B-spline path, validates it against obstacles,
         and uses recursion to smooth problematic segments.
         """
-        # FIX: Pre-process the path to remove consecutive duplicate points
         if not path: return []
+        
+        # De-duplicate consecutive points that are too close for spline math.
         unique_path = [path[0]]
         for point in path[1:]:
-            # Check if the new point is sufficiently far from the last one
             if np.linalg.norm(np.array(point) - np.array(unique_path[-1])) > 1e-6:
                 unique_path.append(point)
-        path = unique_path
+        
+        # FIX: If de-duplication results in a path that's too short for a spline,
+        # return the de-duplicated path itself. This prevents collapsing a valid
+        # short path (e.g., [A, B] where A is close to B) into an invalid one-point path.
+        if len(unique_path) < 2:
+            return path # Return original if it becomes 1 or 0 points
+        if len(unique_path) < 4:
+            # For short paths, spline smoothing is not necessary and can be unstable.
+            return unique_path
+
+        path = unique_path # Use the cleaned path for smoothing
         
         if depth > 2:
             logging.warning("Max smoothing recursion depth reached. Returning original path segment.")
             return path
         
         num_points_in_path = len(path)
-        if num_points_in_path < 2: return path
-        
         spline_degree = min(num_points_in_path - 1, 3)
-        if spline_degree < 1: return path
 
         try:
             path_np = np.array(path).T

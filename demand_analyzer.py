@@ -44,7 +44,12 @@ class DemandAnalyzer:
 
         # Find hubs with a surplus and deficit of drones
         hubs_with_surplus = {hub_id: count for hub_id, count in idle_drones_per_hub.items() if count > 3}
-        hubs_with_deficit = {hub_id for hub_id, count in idle_drones_per_hub.items() if count < 1}
+        
+        # FIX: Iterate over all known HUBS to correctly identify deficits, even for hubs with 0 idle drones.
+        hubs_with_deficit = {
+            hub['id'] for hub in HUBS 
+            if idle_drones_per_hub.get(hub['id'], 0) < 1
+        }
         
         # Simple rebalancing logic
         if hubs_with_surplus and hubs_with_deficit:
@@ -56,4 +61,4 @@ class DemandAnalyzer:
                     # Our current implementation just adds to a queue, which is safe.
                     self.dispatcher.create_rebalancing_mission(self.state, from_hub_id, to_hub_id)
                     # Only move one drone at a time to prevent over-correction
-                    return 
+                    return
