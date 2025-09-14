@@ -30,8 +30,7 @@ class AStarPlanner:
 
     def _get_neighbors_with_cost(self, pos: GridPosition, grid: np.ndarray) -> List[Tuple[GridPosition, float]]:
         """
-        Gets all valid neighbors with their movement cost.
-        Straight moves cost 1, 2D diagonal sqrt(2), 3D diagonal sqrt(3).
+        Gets all valid neighbors with their movement cost, including grid cost.
         """
         neighbors = []
         x, y, z = pos
@@ -44,13 +43,12 @@ class AStarPlanner:
                     nx, ny, nz = x + dx, y + dy, z + dz
                     
                     if 0 <= nx < grid.shape[0] and 0 <= ny < grid.shape[1] and 0 <= nz < grid.shape[2]:
-                        if grid[nx, ny, nz]:
-                            # Calculate cost based on distance
-                            dist = np.sqrt(dx**2 + dy**2 + dz**2)
-                            # FIX: Add a tiny cost incentive for moving "up" (positive y) to break ties deterministically.
-                            if dy > 0:
-                                dist -= 1e-6
-                            neighbors.append(((nx, ny, nz), dist))
+                        grid_cost = grid[nx, ny, nz]
+                        if not np.isinf(grid_cost):
+                            dist_cost = np.sqrt(dx**2 + dy**2 + dz**2)
+                            # FIX: Removed faulty tie-breaking logic. Total cost is now correct.
+                            total_cost = dist_cost + grid_cost
+                            neighbors.append(((nx, ny, nz), total_cost))
         return neighbors
 
     def _heuristic(self, a: GridPosition, b: GridPosition) -> float:

@@ -14,7 +14,16 @@ class PathSmoother:
         Generates a smooth B-spline path, validates it against obstacles,
         and uses recursion to smooth problematic segments.
         """
-        if depth > 2: # Max recursion depth to prevent infinite loops
+        # FIX: Pre-process the path to remove consecutive duplicate points
+        if not path: return []
+        unique_path = [path[0]]
+        for point in path[1:]:
+            # Check if the new point is sufficiently far from the last one
+            if np.linalg.norm(np.array(point) - np.array(unique_path[-1])) > 1e-6:
+                unique_path.append(point)
+        path = unique_path
+        
+        if depth > 2:
             logging.warning("Max smoothing recursion depth reached. Returning original path segment.")
             return path
         
@@ -33,16 +42,13 @@ class PathSmoother:
             
             smoothed_path = list(zip(x_new, y_new, z_new))
 
-            # --- NEW: Iterative Collision Checking ---
             for i in range(len(smoothed_path) - 1):
                 p1, p2 = smoothed_path[i], smoothed_path[i+1]
-                # Check not just the line, but intermediate points for safety
                 num_interp_points = 5
                 for j in range(num_interp_points + 1):
                     interp_point = tuple(np.array(p1) + (j / num_interp_points) * (np.array(p2) - np.array(p1)))
                     if env.is_point_obstructed(interp_point):
                         logging.warning(f"Smoothed path segment {i} collided with obstacle at depth {depth}. Subdividing.")
-                        # --- NEW: Subdivision on collision ---
                         mid_index = num_points_in_path // 2
                         first_half = self.smooth_path(path[:mid_index+1], env, depth + 1)
                         second_half = self.smooth_path(path[mid_index:], env, depth + 1)

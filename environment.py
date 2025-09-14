@@ -5,8 +5,9 @@ from typing import Tuple, List, Dict, Optional
 from opensimplex import OpenSimplex
 from rtree import index
 import logging
+from scipy.ndimage import binary_dilation
 
-from config import AREA_BOUNDS, MIN_ALTITUDE, MAX_ALTITUDE, NO_FLY_ZONES, HUBS, DESTINATIONS, COARSE_GRID_RESOLUTION_M, GRID_VERTICAL_RESOLUTION_M
+from config import AREA_BOUNDS, MIN_ALTITUDE, MAX_ALTITUDE, NO_FLY_ZONES, HUBS, DESTINATIONS, COARSE_GRID_RESOLUTION_M, GRID_VERTICAL_RESOLUTION_M, GRID_RESOLUTION_M
 from utils.geometry import line_segment_intersects_aabb
 from utils.coordinate_manager import CoordinateManager
 
@@ -199,24 +200,29 @@ class Environment:
         
     def create_planning_grid(self) -> np.ndarray:
         w, h, d = self.coord_manager.grid_width, self.coord_manager.grid_height, self.coord_manager.grid_depth
-        grid = np.full((w, h, d), True)
-        logging.info(f"Creating planning grid of size ({w}, {h}, {d})...")
-        for obs_id, bounds_m in self.obstacles.items():
+        obstacle_grid = np.full((w, h, d), False)
+        
+        for bounds_m in self.obstacles.values():
             min_mx, min_my, min_mz, max_mx, max_my, max_mz = bounds_m
             min_g, max_g = self.coord_manager.meters_to_grid((min_mx, min_my, min_mz)), self.coord_manager.meters_to_grid((max_mx, max_my, max_mz))
             if min_g and max_g:
                 min_gx, min_gy, min_gz = min_g
                 max_gx, max_gy, max_gz = max_g
-                grid[max(0, min_gx):min(w, max_gx + 1), max(0, min_gy):min(h, max_gy + 1), max(0, min_gz):min(d, max_gz + 1)] = False
-        logging.info("Planning grid created.")
-        return grid
+                obstacle_grid[max(0, min_gx):min(w, max_gx + 1), max(0, min_gy):min(h, max_gy + 1), max(0, min_gz):min(d, max_gz + 1)] = True
+        
+        cost_grid = np.full((w, h, d), 1.0)
+        cost_grid[obstacle_grid] = np.inf
+        inflation_zone = binary_dilation(obstacle_grid, iterations=2) & ~obstacle_grid
+        cost_grid[inflation_zone] = 10.0
+        return cost_grid
 
+    # THIS IS THE MISSING METHOD
     def create_coarse_planning_grid(self) -> np.ndarray:
         """Creates a lower-resolution grid for fast, high-level pathfinding."""
         w = int(self.coord_manager.area_width_m / COARSE_GRID_RESOLUTION_M)
         h = int(self.coord_manager.area_height_m / COARSE_GRID_RESOLUTION_M)
         d = int((MAX_ALTITUDE - MIN_ALTITUDE) / GRID_VERTICAL_RESOLUTION_M)
-        grid = np.full((w, h, d), True)
+        grid = np.full((w, h, d), True) # True means passable
         
         for bounds_m in self.obstacles.values():
             min_mx, min_my, min_mz, max_mx, max_my, max_mz = bounds_m
@@ -229,5 +235,5 @@ class Environment:
 
             grid[max(0, min_gx):min(w, max_gx + 1), 
                  max(0, min_gy):min(h, max_gy + 1), 
-                 max(0, min_gz):min(d, max_gz + 1)] = False
+                 max(0, min_gz):min(d, max_gz + 1)] = False # False means obstructed
         return grid

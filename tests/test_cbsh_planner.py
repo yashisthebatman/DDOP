@@ -9,13 +9,20 @@ import numpy as np
 
 @pytest.fixture
 def mock_env():
+    # FIX: The spec must include all methods called by the CBSHPlanner constructor
     env = MagicMock(spec=Environment)
     env.is_point_obstructed.return_value = False
+    
     coord_manager = CoordinateManager()
     env.coord_manager = coord_manager
+    
     grid_shape = (coord_manager.grid_width, coord_manager.grid_height, coord_manager.grid_depth)
-    mock_grid = np.full(grid_shape, True)
+    mock_grid = np.full(grid_shape, 1.0)
     env.create_planning_grid.return_value = mock_grid
+    
+    coarse_grid_shape = (10, 10, 10) # Dummy shape for coarse grid
+    env.create_coarse_planning_grid.return_value = np.full(coarse_grid_shape, True)
+    
     return env
 
 @patch('planners.cbsh_planner.PathTimingSolver')
@@ -35,17 +42,10 @@ def test_solves_crossing_conflict(mock_astar, mock_rrt, mock_timing_solver, mock
         return [start_grid, goal_grid]
     mock_astar.return_value.find_path.side_effect = astar_side_effect
     
-    # FIX: The side effect function cannot use 'self'. Instead, it can access
-    # the mock instance it's attached to, which has the start/goal attributes.
     def rrt_plan_side_effect(time_budget_s, custom_bounds_m):
-        # 'mock_rrt.return_value' is the mock instance of AnytimeRRTStar.
-        # Its constructor (__init__) will be called with start_world and goal_world,
-        # which we can capture and store on the mock itself if needed, or just access
-        # the attributes that the real class would have.
         rrt_instance = mock_rrt.return_value
         return ([rrt_instance.start_pos_world, rrt_instance.goal_pos_world], "Success")
 
-    # When AnytimeRRTStar is instantiated, store start/goal on the mock instance
     def rrt_init_side_effect(start_world, goal_world, env, coord_manager):
         mock_instance = MagicMock()
         mock_instance.start_pos_world = start_world
