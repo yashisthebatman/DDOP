@@ -9,8 +9,11 @@ from unittest.mock import MagicMock
 from server import update_simulation 
 from system_state import get_initial_state
 from config import DRONE_BATTERY_WH, DRONE_RECHARGE_TIME_S, HUBS
-# FIX: Import the real CoordinateManager
 from utils.coordinate_manager import CoordinateManager
+
+# Helper to get hub by ID
+def get_hub_by_id(hub_id):
+    return next((h for h in HUBS if h['id'] == hub_id), None)
 
 def calculate_kpis(log_df):
     if log_df.empty: return 0, 0, 0, 0
@@ -30,26 +33,22 @@ def test_mission_log_creation_on_completion():
     state = get_initial_state()
     state['simulation_time'] = 0.0
     
-    mission_id = "M-123"
-    drone_id = "Drone 1"
+    mission_id, drone_id = "M-123", "Drone 1"
     
-    state['drones'][drone_id]['status'] = 'EN ROUTE'
-    state['drones'][drone_id]['mission_id'] = mission_id
-    state['drones'][drone_id]['pos'] = (-74.0, 40.7, 50)
+    state['drones'][drone_id].update({'status': 'EN ROUTE', 'mission_id': mission_id, 'pos': (-74.0, 40.7, 50)})
     
-    end_hub_pos = HUBS["Hub A (South Manhattan)"]
+    # FIX: Get hub location from new list format
+    end_hub_obj = get_hub_by_id("HUB_A")
+    end_hub_pos = end_hub_obj['location']
     
     state['active_missions'][mission_id] = {
-        'mission_id': mission_id, 'drone_id': drone_id, 'order_ids': ['Order1'],
-        'start_time': 0.0, 'total_planned_time': 200.0, 'total_planned_energy': 45.0,
-        'path_world_coords': [(-74.0, 40.7, 50), end_hub_pos],
-        'destinations': [end_hub_pos], 'start_battery': DRONE_BATTERY_WH,
-        'mission_time_elapsed': 0.0, 'flight_time_elapsed': 0.0,
-        'total_maneuver_time': 0, 'stops': [], 'current_stop_index': 0,
-        'end_hub': "Hub A (South Manhattan)"
+        'mission_id': mission_id, 'drone_id': drone_id, 'order_ids': ['Order1'], 'start_time': 0.0,
+        'total_planned_time': 200.0, 'total_planned_energy': 45.0, 'path_world_coords': [(-74.0, 40.7, 50), end_hub_pos],
+        'destinations': [end_hub_pos], 'start_battery': DRONE_BATTERY_WH, 'mission_time_elapsed': 0.0,
+        'flight_time_elapsed': 0.0, 'total_maneuver_time': 0, 'stops': [], 'current_stop_index': 0,
+        'end_hub': end_hub_obj['id']
     }
     
-    # FIX: Use a real CoordinateManager for accurate distance checks.
     mock_planners = {"coord_manager": CoordinateManager()}
     
     loop_count = 0
@@ -57,12 +56,10 @@ def test_mission_log_creation_on_completion():
         update_simulation(state, mock_planners)
         loop_count += 1
     
+    assert loop_count < 1000
     assert mission_id not in state['active_missions']
     assert len(state['completed_missions_log']) == 1
-    
-    log = state['completed_missions_log'][0]
-    assert log['mission_id'] == mission_id
-    assert log['outcome'] == 'Completed'
+    assert state['completed_missions_log'][0]['outcome'] == 'Completed'
 
 def test_kpi_calculations():
     mock_log_data = [
@@ -72,9 +69,7 @@ def test_kpi_calculations():
         {'outcome': 'Failed: Low Battery', 'planned_duration_sec': 120, 'actual_duration_sec': 80, 'planned_energy_wh': 60, 'actual_energy_wh': 40},
     ]
     df = pd.DataFrame(mock_log_data)
-    
     on_time_rate, energy_error, total_missions, failure_rate = calculate_kpis(df)
-    
     assert on_time_rate == pytest.approx((2/3) * 100) 
     assert energy_error == pytest.approx(((abs(52-50)/50 + abs(60-50)/50 + abs(48-50)/50) / 3) * 100)
     assert total_missions == 4

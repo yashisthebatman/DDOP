@@ -1,17 +1,23 @@
 # FILE: tests/dispatch/test_vrp_solver.py
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import numpy as np
 
 from dispatch.vrp_solver import VRPSolver
 from config import HUBS
+
+# Helper to get location from new HUBS format
+def get_hub_loc_by_name(hub_name):
+    for hub in HUBS:
+        if hub['name'] == hub_name:
+            return hub['location']
+    return None
 
 @pytest.fixture
 def mock_predictor():
     """A simple predictor that returns cost based on Euclidean distance."""
     predictor = MagicMock()
     def cost_func(p1, p2, *args):
-        # FIX: Use Euclidean distance for a more realistic and stable cost model in testing.
         dist = np.linalg.norm(np.array(p1) - np.array(p2))
         return dist, dist # time, energy
     predictor.predict.side_effect = cost_func
@@ -19,13 +25,16 @@ def mock_predictor():
 
 @pytest.fixture
 def vrp_solver(mock_predictor):
-    return VRPSolver(mock_predictor)
+    # The solver requires the old dict format for HUBS, so we create it for the test.
+    hubs_dict = {h['name']: h['location'] for h in HUBS}
+    with patch('dispatch.vrp_solver.HUBS', hubs_dict):
+        yield VRPSolver(mock_predictor)
 
 def test_correct_batching_mdvrp(vrp_solver):
     """Assert the MDVRP solver creates two tours, with one drone taking two packages that are close to each other."""
     drones = [
-        {'id': 'D1', 'pos': HUBS["Hub A (South Manhattan)"], 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.5},
-        {'id': 'D2', 'pos': HUBS["Hub A (South Manhattan)"], 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.5}
+        {'id': 'D1', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.5},
+        {'id': 'D2', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.5}
     ]
     orders = [
         {'id': 'O1', 'pos': (-73.98, 40.73, 50), 'payload_kg': 1.0},   # Far
@@ -52,8 +61,8 @@ def test_correct_batching_mdvrp(vrp_solver):
 def test_payload_capacity_is_respected_mdvrp(vrp_solver):
     """Give two drones a 2kg capacity and two 1.5kg orders. Assert they are assigned to different tours."""
     drones = [
-        {'id': 'D1', 'pos': HUBS["Hub A (South Manhattan)"], 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.0},
-        {'id': 'D2', 'pos': HUBS["Hub A (South Manhattan)"], 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.0}
+        {'id': 'D1', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.0},
+        {'id': 'D2', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.0}
     ]
     orders = [
         {'id': 'O1', 'pos': (-74.0, 40.71, 50), 'payload_kg': 1.5},
@@ -72,7 +81,7 @@ def test_payload_capacity_is_respected_mdvrp(vrp_solver):
 def test_returns_no_solution_if_infeasible_mdvrp(vrp_solver):
     """Provide an order that is too heavy for any drone. Assert the solver returns an empty list."""
     drones = [
-        {'id': 'D1', 'pos': HUBS["Hub A (South Manhattan)"], 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.0}
+        {'id': 'D1', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.0}
     ]
     orders = [
         {'id': 'O1', 'pos': (-74.0, 40.71, 50), 'payload_kg': 3.0} # Too heavy

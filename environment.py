@@ -11,6 +11,7 @@ from config import AREA_BOUNDS, MIN_ALTITUDE, MAX_ALTITUDE, NO_FLY_ZONES, HUBS, 
 from utils.geometry import line_segment_intersects_aabb
 from utils.coordinate_manager import CoordinateManager
 
+# ... (dataclasses and other classes are unchanged) ...
 @dataclass
 class Order:
     id: int
@@ -70,9 +71,9 @@ class Environment:
         self.buildings: List[Building] = self._generate_and_index_buildings()
         self._index_static_nfzs()
         logging.info(f"Spatial index ready. Indexed {len(self.obstacles)} obstacles.")
-
+    
+    # ... (get_building_at, get_surface_height, _add_obstacle_to_index are unchanged) ...
     def get_building_at(self, world_pos_xy: Tuple[float, float]) -> Optional[Building]:
-        """Finds the building object at a given lon/lat, if one exists."""
         lon, lat = world_pos_xy
         for building in self.buildings:
             cx, cy = building.center_xy
@@ -80,17 +81,11 @@ class Environment:
             if (cx - sx/2 <= lon <= cx + sx/2) and (cy - sy/2 <= lat <= cy + sy/2):
                 return building
         return None
-
     def get_surface_height(self, world_pos_xy: Tuple[float, float]) -> float:
-        """
-        Returns the height of a building's roof at a given lon/lat,
-        or the minimum flight altitude (ground level) if no building is present.
-        """
         building = self.get_building_at(world_pos_xy)
         if building:
             return building.height
         return MIN_ALTITUDE
-
     def _add_obstacle_to_index(self, bounds_m: tuple):
         obstacle_id = self.obstacle_counter
         self.obstacle_index.insert(obstacle_id, bounds_m)
@@ -99,19 +94,16 @@ class Environment:
         return obstacle_id
 
     def _generate_and_index_buildings(self) -> List[Building]:
-        """
-        Generates a more realistic, dense city block layout.
-        """
         buildings = []
         np.random.seed(42)
-        all_poi = list(HUBS.values()) + list(DESTINATIONS.values())
+        # FIX: Get hub locations from the new list format
+        hub_locations = [h['location'] for h in HUBS]
+        all_poi = hub_locations + list(DESTINATIONS.values())
 
         num_avenues = 10
         num_streets = 20
-
         lon_range = AREA_BOUNDS[2] - AREA_BOUNDS[0]
         lat_range = AREA_BOUNDS[3] - AREA_BOUNDS[1]
-
         block_width = lon_range / num_avenues * 0.75
         block_height = lat_range / num_streets * 0.75
         
@@ -119,35 +111,26 @@ class Environment:
             for j in range(num_streets):
                 center_x = AREA_BOUNDS[0] + (i + 0.5) * (lon_range / num_avenues)
                 center_y = AREA_BOUNDS[1] + (j + 0.5) * (lat_range / num_streets)
-
                 is_conflicting = False
                 for poi in all_poi:
                     poi_lon, poi_lat, _ = poi
-                    if (abs(center_x - poi_lon) < block_width and
-                        abs(center_y - poi_lat) < block_height):
+                    if (abs(center_x - poi_lon) < block_width and abs(center_y - poi_lat) < block_height):
                         is_conflicting = True
                         break
-                if is_conflicting:
+                if is_conflicting or np.random.rand() < 0.6: 
                     continue
-
-                if np.random.rand() < 0.6: 
-                    continue
-                
                 height_factor = 1.0 - (j / num_streets)
-                altitude = np.random.uniform(30, 120) * (1 + height_factor)
-                altitude = min(altitude, MAX_ALTITUDE * 0.9)
-
+                altitude = min(np.random.uniform(30, 120) * (1 + height_factor), MAX_ALTITUDE * 0.9)
                 building = Building(id=len(buildings), center_xy=(center_x, center_y), size_xy=(block_width, block_height), height=altitude)
                 buildings.append(building)
-                
                 bottom_left_world = (center_x - block_width / 2, center_y - block_height / 2, 0)
                 top_right_world = (center_x + block_width / 2, center_y + block_height / 2, altitude)
                 min_mx, min_my, _ = self.coord_manager.world_to_meters(bottom_left_world)
                 max_mx, max_my, _ = self.coord_manager.world_to_meters(top_right_world)
                 self._add_obstacle_to_index((min_mx, min_my, 0, max_mx, max_my, altitude))
-                
         return buildings
-
+    
+    # ... (rest of Environment class is unchanged) ...
     def _index_static_nfzs(self):
         for zone in self.static_nfzs:
             bottom_left_world = (zone[0], zone[1], MIN_ALTITUDE)
@@ -155,7 +138,6 @@ class Environment:
             min_mx, min_my, _ = self.coord_manager.world_to_meters(bottom_left_world)
             max_mx, max_my, _ = self.coord_manager.world_to_meters(top_right_world)
             self._add_obstacle_to_index((min_mx, min_my, MIN_ALTITUDE, max_mx, max_my, MAX_ALTITUDE))
-            
     def remove_dynamic_obstacles(self):
         if not self.dynamic_nfzs: return
         for d_nfz in self.dynamic_nfzs:
@@ -163,9 +145,7 @@ class Environment:
             if d_nfz['id'] in self.obstacles: del self.obstacles[d_nfz['id']]
         self.dynamic_nfzs.clear()
         self.event_triggered = self.was_nfz_just_added = False
-    
     def add_dynamic_nfz(self, zone_world: List[float]):
-        """Adds a new dynamic No-Fly Zone to the environment."""
         bl_world, tr_world = (zone_world[0], zone_world[1], MIN_ALTITUDE), (zone_world[2], zone_world[3], MAX_ALTITUDE)
         min_mx, min_my, _ = self.coord_manager.world_to_meters(bl_world)
         max_mx, max_my, _ = self.coord_manager.world_to_meters(tr_world)
@@ -174,7 +154,6 @@ class Environment:
         self.dynamic_nfzs.append({'zone': zone_world, 'bounds': bounds_m, 'id': obs_id})
         self.event_triggered = self.was_nfz_just_added = True
         logging.info(f"Added new dynamic NFZ with ID {obs_id} at bounds {zone_world}")
-
     def is_point_obstructed(self, point_world: Tuple[float, float, float]) -> bool:
         lon, lat, alt = point_world
         if not (AREA_BOUNDS[0] <= lon <= AREA_BOUNDS[2] and AREA_BOUNDS[1] <= lat <= AREA_BOUNDS[3] and MIN_ALTITUDE <= alt <= MAX_ALTITUDE):
@@ -186,7 +165,6 @@ class Environment:
             if (bounds_m[0] <= mx <= bounds_m[3] and bounds_m[1] <= my <= bounds_m[4] and bounds_m[2] <= mz <= bounds_m[5]):
                 return True
         return False
-
     def is_line_obstructed(self, p1_world: Tuple[float, float, float], p2_world: Tuple[float, float, float]) -> bool:
         p1_m, p2_m = np.array(self.coord_manager.world_to_meters(p1_world)), np.array(self.coord_manager.world_to_meters(p2_world))
         min_m, max_m = np.minimum(p1_m, p2_m), np.maximum(p1_m, p2_m)
@@ -194,14 +172,11 @@ class Environment:
             if line_segment_intersects_aabb(tuple(p1_m), tuple(p2_m), self.obstacles[obs_id]):
                 return True
         return False
-    
     def update_environment(self, simulation_time: float, time_step: float):
         self.weather.update_weather(time_step)
-        
     def create_planning_grid(self) -> np.ndarray:
         w, h, d = self.coord_manager.grid_width, self.coord_manager.grid_height, self.coord_manager.grid_depth
         obstacle_grid = np.full((w, h, d), False)
-        
         for bounds_m in self.obstacles.values():
             min_mx, min_my, min_mz, max_mx, max_my, max_mz = bounds_m
             min_g, max_g = self.coord_manager.meters_to_grid((min_mx, min_my, min_mz)), self.coord_manager.meters_to_grid((max_mx, max_my, max_mz))
@@ -209,21 +184,16 @@ class Environment:
                 min_gx, min_gy, min_gz = min_g
                 max_gx, max_gy, max_gz = max_g
                 obstacle_grid[max(0, min_gx):min(w, max_gx + 1), max(0, min_gy):min(h, max_gy + 1), max(0, min_gz):min(d, max_gz + 1)] = True
-        
         cost_grid = np.full((w, h, d), 1.0)
         cost_grid[obstacle_grid] = np.inf
         inflation_zone = binary_dilation(obstacle_grid, iterations=2) & ~obstacle_grid
         cost_grid[inflation_zone] = 10.0
         return cost_grid
-
-    # THIS IS THE MISSING METHOD
     def create_coarse_planning_grid(self) -> np.ndarray:
-        """Creates a lower-resolution grid for fast, high-level pathfinding."""
         w = int(self.coord_manager.area_width_m / COARSE_GRID_RESOLUTION_M)
         h = int(self.coord_manager.area_height_m / COARSE_GRID_RESOLUTION_M)
         d = int((MAX_ALTITUDE - MIN_ALTITUDE) / GRID_VERTICAL_RESOLUTION_M)
-        grid = np.full((w, h, d), True) # True means passable
-        
+        grid = np.full((w, h, d), True)
         for bounds_m in self.obstacles.values():
             min_mx, min_my, min_mz, max_mx, max_my, max_mz = bounds_m
             min_gx = int(min_mx / COARSE_GRID_RESOLUTION_M)
@@ -232,8 +202,5 @@ class Environment:
             max_gx = int(max_mx / COARSE_GRID_RESOLUTION_M)
             max_gy = int(max_my / COARSE_GRID_RESOLUTION_M)
             max_gz = int((max_mz - MIN_ALTITUDE) / GRID_VERTICAL_RESOLUTION_M)
-
-            grid[max(0, min_gx):min(w, max_gx + 1), 
-                 max(0, min_gy):min(h, max_gy + 1), 
-                 max(0, min_gz):min(d, max_gz + 1)] = False # False means obstructed
+            grid[max(0, min_gx):min(w, max_gx + 1), max(0, min_gy):min(h, max_gy + 1), max(0, min_gz):min(d, max_gz + 1)] = False
         return grid
