@@ -17,7 +17,6 @@
             <div id="simTime">Sim Time: 0.0s</div>
         </div>
         <div class="controls">
-            <!-- FIX: Removed the redundant runPauseButton and kept the correctly named toggleSimulationButton -->
             <button id="toggleSimulationButton" class="run">▶ Run Sim</button>
             <button id="resetButton" class="danger">⚠️ Reset</button>
         </div>
@@ -52,6 +51,16 @@
             <div class="table-container">
                 <table id="pendingOrdersTable">
                     <thead><tr><th>ID</th><th>Destination</th><th>Payload</th><th>Priority</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        <!-- NEW: "In Process Orders" table added -->
+        <div class="content-section">
+            <h2>In Process Orders</h2>
+            <div class="table-container">
+                <table id="inProcessOrdersTable">
+                    <thead><tr><th>Order ID</th><th>Drone</th><th>Destination</th><th>Status</th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>

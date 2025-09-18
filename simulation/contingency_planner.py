@@ -28,11 +28,12 @@ def _find_nearest_hub(pos, coord_manager):
 
 def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners: Dict):
     drone = state['drones'][drone_id]
-    # Do not trigger a new emergency if one is already in progress
     if drone['status'] in ['EMERGENCY_RETURN', 'CRITICAL_FAILURE']:
         return
         
     original_mission_id = drone['mission_id']
+    logging.info(f"[DEBUG] Tick {state['simulation_time']:.1f}: CONTINGENCY TRIGGERED for {drone_id} on mission {original_mission_id}. Reason: {reason}. Current status: {drone['status']}")
+    
     original_mission = state['active_missions'].get(original_mission_id)
     log_event(state, f"⚠️ CONTINGENCY: {drone_id} entering EMERGENCY_RETURN due to: {reason}.")
     if original_mission:
@@ -52,7 +53,6 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
     hub_id, hub_pos = _find_nearest_hub(drone['pos'], coord_manager)
     if not hub_pos:
         log_event(state, f"CRITICAL: {drone_id} could not find a hub to return to!")
-        # FIX: A drone mid-air that cannot return should not be IDLE.
         drone['status'] = 'CRITICAL_FAILURE' 
         return
         
@@ -60,7 +60,6 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
     path, status = planner.find_strategic_path_rrt(drone['pos'], hub_pos)
     if not path:
         log_event(state, f"CRITICAL: {drone_id} could not plan emergency return path! Status: {status}")
-        # FIX: This is a critical failure, not an idle state.
         drone['status'] = 'CRITICAL_FAILURE'
         return
         
@@ -80,6 +79,7 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
     drone['mission_id'] = emergency_mission_id
 
 def check_for_contingencies(state: Dict, planners: Dict):
+    # ... (rest of file is the same)
     env = planners['env']
     predictor = planners['predictor']
     coord_manager = planners['coord_manager']

@@ -19,7 +19,6 @@ socket.onmessage = (event) => {
     if (message.simulation_state) {
         updateUI(message);
         
-        // FIX: Update the 3D plot with data from the server
         if (message.plotly_data) {
             if (!plotInitialized) {
                 const layout = {
@@ -65,9 +64,9 @@ function showNotification(text, type = 'info') {
 
 function updateUI(message) {
     const state = message.simulation_state;
-    document.getElementById('simTime').textContent = `Sim Time: ${state.simulation_time.toFixed(1)}s`;
-    
     const drones = message.drone_list || [];
+    
+    document.getElementById('simTime').textContent = `Sim Time: ${state.simulation_time.toFixed(1)}s`;
     document.getElementById('dronesIdle').textContent = drones.filter(d => d.status === 'IDLE').length;
     document.getElementById('dronesActive').textContent = drones.filter(d => !['IDLE', 'RECHARGING'].includes(d.status)).length;
     document.getElementById('ordersPending').textContent = Object.keys(state.pending_orders).length;
@@ -79,7 +78,8 @@ function updateUI(message) {
 
     updateDroneStatusList(drones);
     updatePendingOrdersTable(Object.values(state.pending_orders || {}));
-    updateCompletedMissionsTable(state.completed_missions_log || []); // NEW
+    updateInProcessOrdersTable(Object.values(state.active_missions || {}), drones); // Call the new function
+    updateCompletedMissionsTable(state.completed_missions_log || []);
     updateEventLog(state.log || []);
 }
 
@@ -134,14 +134,59 @@ function updatePendingOrdersTable(orders) {
     tableBody.innerHTML = html;
 }
 
-// NEW: Function to update the completed missions table
+// Corrected function to update the "In Process Orders" table
+function updateInProcessOrdersTable(missions, allDrones) {
+    const tableBody = document.querySelector("#inProcessOrdersTable tbody");
+    const inProcessOrders = [];
+    const dronesById = Object.fromEntries(allDrones.map(d => [d.id, d]));
+
+    missions.forEach(mission => {
+        // Only include orders from non-rebalancing/emergency missions that have stops
+        if (mission.stops && mission.stops.length > 0 && mission.order_ids.length > 0) {
+            const drone = dronesById[mission.drone_id];
+            // An order is "in process" if the drone is en-route or delivering
+            if (drone && (drone.status === 'EN ROUTE' || drone.status === 'PERFORMING_DELIVERY')) {
+                // Find the current stop for this mission
+                const currentStopIndex = mission.current_stop_index || 0;
+                if (currentStopIndex < mission.stops.length) {
+                    const stop = mission.stops[currentStopIndex];
+                    inProcessOrders.push({
+                        order_id: stop.id,
+                        drone_id: mission.drone_id,
+                        dest_name: stop.dest_name || 'N/A', 
+                        status: drone.status
+                    });
+                }
+            }
+        }
+    });
+
+    if (inProcessOrders.length === 0) {
+        tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center;">No orders in process</td></tr>`;
+        return;
+    }
+
+    let html = '';
+    for (const order of inProcessOrders) {
+        html += `
+            <tr>
+                <td>${order.order_id.split('-')[1]}</td>
+                <td>${order.drone_id}</td>
+                <td>${order.dest_name}</td>
+                <td>${order.status}</td>
+            </tr>
+        `;
+    }
+    tableBody.innerHTML = html;
+}
+
 function updateCompletedMissionsTable(missions) {
     const tableBody = document.querySelector("#completedMissionsTable tbody");
     if (missions.length === 0) {
         tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center;">No completed missions</td></tr>`;
         return;
     }
-    const reversedMissions = [...missions].reverse().slice(0, 20); // Show last 20
+    const reversedMissions = [...missions].reverse().slice(0, 20);
     let html = '';
     for (const mission of reversedMissions) {
         const outcomeClass = mission.outcome.startsWith('Failed') ? 'log-fail' : 'log-success';
@@ -186,7 +231,6 @@ function setupEventListeners() {
             high_priority: formData.get('high_priority') === 'on'
         };
         sendCommand('add_order', payload);
-        addOrderForm.reset();
     });
 }
 

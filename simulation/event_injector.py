@@ -3,7 +3,7 @@ import random
 import logging
 import numpy as np
 
-from config import DRONE_BATTERY_WH, AREA_BOUNDS
+from config import AREA_BOUNDS
 
 def log_event(state, message):
     """Adds a new message to the persistent event log."""
@@ -12,7 +12,7 @@ def log_event(state, message):
 
 def inject_random_event(state, env):
     """
-    With a small probability, injects a random failure or event into the simulation.
+    With a small probability, injects a random event into the simulation.
     """
     # Trigger probability per simulation tick
     if random.random() < 0.005:
@@ -22,16 +22,10 @@ def inject_random_event(state, env):
         if not active_drones:
             return
 
-        event_type = random.choice(['BATTERY_FAULT', 'SUDDEN_NFZ'])
+        # FIX: Removed 'BATTERY_FAULT' event type for more realistic simulation.
+        event_type = 'SUDDEN_NFZ'
 
-        if event_type == 'BATTERY_FAULT':
-            drone_to_affect = random.choice(active_drones)
-            drone_id = drone_to_affect['id']
-            fault_amount = DRONE_BATTERY_WH * 0.25
-            state['drones'][drone_id]['battery'] -= fault_amount
-            log_event(state, f"⚡️ EVENT: Battery fault on {drone_id}. Lost {fault_amount:.1f}Wh.")
-
-        elif event_type == 'SUDDEN_NFZ':
+        if event_type == 'SUDDEN_NFZ':
             lon_min, lat_min, lon_max, lat_max = AREA_BOUNDS
             # Create a reasonably sized NFZ within the bounds
             center_lon = random.uniform(lon_min + 0.005, lon_max - 0.005)

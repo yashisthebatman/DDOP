@@ -1,5 +1,4 @@
 # FILE: server.py
-
 import asyncio
 import logging
 import os
@@ -28,10 +27,9 @@ from simulation.deconfliction import check_and_resolve_conflicts
 from utils.geometry import calculate_distance_3d
 from demand_analyzer import DemandAnalyzer
 
-# --- Logging Configuration ---
+# Ensure logging is configured to show INFO level messages
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Global State & Planners ---
 planners = {}
 state = {}
 connected_clients = set()
@@ -40,7 +38,6 @@ active_planning_futures = []
 demand_analyzer_thread = None
 shutdown_event = threading.Event()
 
-# --- Helper functions ---
 def _create_building_mesh_data(building, coord_manager):
     center_x, center_y = building.center_xy
     size_x, size_y = building.size_xy
@@ -120,9 +117,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 def update_simulation(state, planners):
-    # FIX PART 1: Moved contingency check to the beginning of the update cycle.
-    # This ensures that we check for and handle problems (like low battery)
-    # BEFORE the drone moves or completes a mission in this tick.
     contingency_planner.check_for_contingencies(state, planners)
 
     state['simulation_time'] += SIMULATION_TIME_STEP
@@ -142,6 +136,13 @@ def update_simulation(state, planners):
         
         if drone['status'] == 'PERFORMING_DELIVERY':
             if state['simulation_time'] >= mission.get('maneuver_complete_at', float('inf')):
+                stop_idx = mission.get('current_stop_index', 0)
+                if 0 <= stop_idx < len(mission.get('stops', [])):
+                    completed_order_id = mission['stops'][stop_idx]['id']
+                    if completed_order_id not in state['completed_orders']:
+                        logging.info(f"[DEBUG] Tick {state['simulation_time']:.1f}: COMPLETING order '{completed_order_id}' for mission {mission_id}.")
+                        state['completed_orders'].append(completed_order_id)
+                
                 mission['current_stop_index'] += 1
                 mission['current_path_target_index'] = min(len(mission.get('path_world_coords', [])) -1, mission['current_path_target_index'] + 1)
                 drone.pop('maneuver_complete_at', None)
@@ -186,6 +187,7 @@ def update_simulation(state, planners):
                     delivery_pos = mission['stops'][stop_idx]['pos']
                     dist_to_delivery = calculate_distance_3d(coord_manager.world_to_meters(drone['pos']), coord_manager.world_to_meters(delivery_pos))
                     if dist_to_delivery < 5.0:
+                        logging.info(f"[DEBUG] Tick {state['simulation_time']:.1f}: Drone {drone_id} arrived at destination. Status -> PERFORMING_DELIVERY.")
                         drone['status'] = 'PERFORMING_DELIVERY'
                         mission['maneuver_complete_at'] = state['simulation_time'] + DELIVERY_MANEUVER_TIME_SEC
                         continue
@@ -206,13 +208,8 @@ def update_simulation(state, planners):
             drone['battery'] = mission.get('start_battery', DRONE_BATTERY_WH) - (progress * mission.get('total_planned_energy', 0))
 
     for mission_id in missions_to_complete:
-        # FIX PART 2: Re-fetch the mission object from state. It might have been deleted by the
-        # contingency planner since it was added to missions_to_complete.
-        # If it's gone, we must not process it as a success.
         mission = state.get('active_missions', {}).get(mission_id)
         if not mission:
-            # This handles the race condition where a mission is completed and
-            # fails in the same tick. We respect the failure.
             continue
             
         drone_id = mission['drone_id']
@@ -222,7 +219,6 @@ def update_simulation(state, planners):
             actual_duration = state['simulation_time'] - mission.get('start_time', 0)
             actual_energy = mission.get('start_battery', DRONE_BATTERY_WH) - drone['battery']
             state['completed_missions_log'].append({"mission_id": mission_id, "drone_id": drone_id, "completion_timestamp": float(state['simulation_time']), "planned_duration_sec": float(mission.get('total_planned_time', 0)), "actual_duration_sec": float(actual_duration), "planned_energy_wh": float(mission.get('total_planned_energy', 0)), "actual_energy_wh": float(actual_energy), "number_of_stops": len(mission.get('stops', [])), "outcome": "Completed"})
-            [state['completed_orders'].append(oid) for oid in mission.get('order_ids', []) if oid not in state['completed_orders']]
             state['completed_missions'][mission_id] = mission
             
         end_hub_id = mission.get('end_hub')
@@ -238,7 +234,9 @@ def update_simulation(state, planners):
         drone['available_at'] = state['simulation_time'] + DRONE_RECHARGE_TIME_S
         
         if mission_id in state['active_missions']: del state['active_missions'][mission_id]
+# ... rest of server.py
 
+# ... (the rest of server.py remains unchanged) ...
 async def broadcast_state():
     if connected_clients:
         state_snapshot = {}
@@ -279,7 +277,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     dest_pos = DESTINATIONS.get(payload['dest_name'])
                     if dest_pos:
                         order_id = f"Order-{uuid.uuid4().hex[:6]}"
-                        order = {'id': order_id, 'pos': dest_pos, **payload}
+                        order = {'id': order_id, 'pos': dest_pos, 'dest_name': payload['dest_name'], **payload}
                         dispatch_status = planners['dispatcher'].dispatch_order(state, order, payload['hub_id'])
                         if dispatch_status == "out_of_range":
                             response_message = {"type": "order_out_of_range", "payload": {"order_id": order_id}}
