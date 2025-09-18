@@ -95,14 +95,12 @@ class FleetManager:
         mission_updates = {}
         
         if not solution or drone_id not in solution or not solution[drone_id]:
-            logging.error(f"CBSH planning FAILED for agent {drone_id} on mission {mission_id}.")
-            # Return the full drone object to prevent data corruption
+            # MODIFIED: More descriptive log
+            logging.error(f"PLAN FAILED: CBSH planning for {drone_id} on mission {mission_id}. Drone set to IDLE.")
             drone_updates[drone_id] = state['drones'][drone_id].copy()
             drone_updates[drone_id]['status'] = 'IDLE'
             drone_updates[drone_id]['mission_id'] = None
             return False, {"drone_updates": drone_updates, "mission_failures": [mission_id], "error": "CBS could not find a solution."}
-
-        logging.info(f"CBSH planning successful for {drone_id}. Preparing mission updates.")
         
         path = solution[drone_id]
         world_path = [p[0] for p in path]
@@ -121,6 +119,9 @@ class FleetManager:
             total_maneuver_time = num_stops * DELIVERY_MANEUVER_TIME_SEC
             flight_time = path[-1][1]
             
+            # --- NEW: Contextual log for planning success ---
+            logging.info(f"PLAN SUCCESS: Mission {mission_id} for {drone_id} is now EN ROUTE. Path has {len(smoothed_path)} waypoints.")
+
             mission_updates[mission_id] = {
                 'path_world_coords': smoothed_path,
                 'total_planned_energy': total_energy,
@@ -130,11 +131,11 @@ class FleetManager:
                 'start_battery': state['drones'][drone_id]['battery'],
                 'current_path_target_index': 1
             }
-            # Return the full drone object with updates to prevent corruption
             drone_updates[drone_id] = state['drones'][drone_id].copy()
             drone_updates[drone_id]['status'] = 'EN ROUTE'
             return True, {"drone_updates": drone_updates, "mission_updates": mission_updates, "successful_mission_ids": [mission_id]}
         else:
+            logging.error(f"PLAN FAILED: CBSH planning for {drone_id} on mission {mission_id} returned an empty path. Drone set to IDLE.")
             drone_updates[drone_id] = state['drones'][drone_id].copy()
             drone_updates[drone_id]['status'] = 'IDLE'
             drone_updates[drone_id]['mission_id'] = None

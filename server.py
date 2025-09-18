@@ -19,8 +19,9 @@ from environment import Environment, WeatherSystem
 from ml_predictor.predictor import EnergyTimePredictor
 from utils.coordinate_manager import CoordinateManager
 from planners.cbsh_planner import CBSHPlanner
-from fleet.manager import FleetManager
+from fleet.manager import FleetManager, Mission
 from dispatch.dispatcher import Dispatcher, get_hub_by_id
+from dispatch.vrp_solver import VRPSolver
 import simulation.event_injector as event_injector
 import simulation.contingency_planner as contingency_planner
 from simulation.deconfliction import check_and_resolve_conflicts
@@ -94,9 +95,11 @@ async def lifespan(app: FastAPI):
     cbsh_planner = CBSHPlanner(env, coord_manager)
     fleet_manager = FleetManager(cbsh_planner, predictor, state_lock)
     dispatcher = Dispatcher(fleet_manager, predictor)
+    vrp_solver = VRPSolver(predictor)
     planners.update({
         'coord_manager': coord_manager, 'env': env, 'predictor': predictor,
         'dispatcher': dispatcher, 'fleet_manager': fleet_manager,
+        'vrp_solver': vrp_solver,
         'executor': ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PLANNERS)
     })
     for dest_name, pos in DESTINATIONS.items():
@@ -128,18 +131,10 @@ def update_simulation(state, planners):
         check_and_resolve_conflicts(active_drones, planners)
         
     missions_to_complete = []
-    # Loop over a copy of drones as their state/mission can change mid-loop
     for drone in list(state['drones'].values()):
-        # IMPLANTED LOGGING
-        logging.info(f"[SIM_LOOP] ---- Processing drone {drone['id']} at t={state['simulation_time']:.1f} ----")
-        
-        # Perform per-drone contingency check
         contingency_triggered = contingency_planner.check_for_contingencies(state, planners, drone)
-        # IMPLANTED LOGGING
-        logging.info(f"[SIM_LOOP] Contingency check for {drone['id']} returned: {contingency_triggered}. Drone status is now: {drone['status']}")
-
         if contingency_triggered:
-            continue # Skip normal update if a contingency was handled
+            continue
 
         mission_id = drone.get('mission_id')
         mission = state.get('active_missions', {}).get(mission_id)
@@ -149,10 +144,6 @@ def update_simulation(state, planners):
         if 'current_path_target_index' not in mission: mission['current_path_target_index'] = 1
         
         if drone['status'] == 'PERFORMING_DELIVERY':
-            # IMPLANTED LOGGING
-            logging.info(f"[SIM_LOOP] Drone {drone['id']} is PERFORMING_DELIVERY. Time: {state['simulation_time']:.1f}, Maneuver complete at: {mission.get('maneuver_complete_at', 'N/A')}")
-            
-            # Calculate and apply energy drain for hovering during delivery.
             payload_kg = mission.get('payload_kg', 0.0) if mission else 0.0
             hover_power_watts = DRONE_BASE_POWER_WATTS + (payload_kg * DRONE_ADDITIONAL_WATTS_PER_KG)
             energy_drain_wh = (hover_power_watts * SIMULATION_TIME_STEP) / 3600.0
@@ -163,17 +154,17 @@ def update_simulation(state, planners):
                 if 0 <= stop_idx < len(mission.get('stops', [])):
                     completed_order_id = mission['stops'][stop_idx]['id']
                     if completed_order_id not in state['completed_orders']:
-                        # IMPLANTED LOGGING
-                        logging.critical(f"[SIM_LOOP] >>> COMPLETING ORDER <<< Order '{completed_order_id}' is being marked as complete for mission {mission_id}.")
+                        logging.info(f"DELIVERY: Order '{completed_order_id}' completed by {drone['id']} for mission {mission_id}.")
                         state['completed_orders'].append(completed_order_id)
                 
                 mission['current_stop_index'] += 1
                 mission['current_path_target_index'] = min(len(mission.get('path_world_coords', [])) -1, mission['current_path_target_index'] + 1)
                 drone.pop('maneuver_complete_at', None)
-                if mission['current_stop_index'] >= len(mission.get('stops', [])):
-                    drone['status'] = 'RETURNING_TO_HUB'
-                else:
-                    drone['status'] = 'EN ROUTE'
+
+                # --- NEW: DETAILED LOG AT STATE TRANSITION ---
+                next_status = 'RETURNING_TO_HUB' if mission['current_stop_index'] >= len(mission.get('stops', [])) else 'EN ROUTE'
+                logging.info(f"STATE CHANGE: {drone['id']} finished delivery. Battery: {drone['battery']:.2f}Wh. New status: {next_status}.")
+                drone['status'] = next_status
             continue 
         
         elif drone['status'] == 'AVOIDING':
@@ -194,8 +185,6 @@ def update_simulation(state, planners):
             path = mission.get('path_world_coords', [])
             if not path or mission['current_path_target_index'] >= len(path): continue
 
-            # --- START: SOLUTION FOR SECOND BUG ---
-            # Store current position before calculating movement
             start_pos_of_tick = drone['pos']
             current_pos_np = np.array(start_pos_of_tick)
 
@@ -204,14 +193,12 @@ def update_simulation(state, planners):
             dist_to_wp = np.linalg.norm(direction)
             move_dist = DRONE_SPEED_MPS * SIMULATION_TIME_STEP
 
-            # Calculate the new position
             if dist_to_wp < move_dist:
                 new_pos = tuple(target_waypoint.tolist())
                 mission['current_path_target_index'] += 1
             else:
                 new_pos = tuple((current_pos_np + (direction / dist_to_wp) * move_dist).tolist())
 
-            # Apply a differential (per-tick) energy drain for the movement
             predictor = planners['predictor']
             current_wind = planners['env'].weather.get_wind_at_location(*start_pos_of_tick)
             payload_kg = mission.get('payload_kg', 0.0)
@@ -219,9 +206,7 @@ def update_simulation(state, planners):
             _, energy_drain_wh = predictor.predict(start_pos_of_tick, new_pos, payload_kg, current_wind)
             drone['battery'] = max(0, drone['battery'] - energy_drain_wh)
             
-            # Update the drone's position after all calculations
             drone['pos'] = new_pos
-            # --- END: SOLUTION FOR SECOND BUG ---
 
             if drone['status'] == 'EN ROUTE':
                 stop_idx = mission.get('current_stop_index', 0)
@@ -229,8 +214,7 @@ def update_simulation(state, planners):
                     delivery_pos = mission['stops'][stop_idx]['pos']
                     dist_to_delivery = calculate_distance_3d(coord_manager.world_to_meters(drone['pos']), coord_manager.world_to_meters(delivery_pos))
                     if dist_to_delivery < 5.0:
-                        # IMPLANTED LOGGING
-                        logging.info(f"[SIM_LOOP] >>> ARRIVAL <<< Drone {drone['id']} arrived at destination. Distance: {dist_to_delivery:.2f}m. Changing status to PERFORMING_DELIVERY.")
+                        logging.info(f"ARRIVAL: Drone {drone['id']} arrived at destination for order {mission['stops'][stop_idx]['id']}. Starting delivery maneuver.")
                         drone['status'] = 'PERFORMING_DELIVERY'
                         mission['maneuver_complete_at'] = state['simulation_time'] + DELIVERY_MANEUVER_TIME_SEC
                         continue
@@ -245,7 +229,6 @@ def update_simulation(state, planners):
                     missions_to_complete.append(mission_id)
                     continue
             
-            # Keep flight time for logging, but remove the flawed proportional battery logic
             mission['flight_time_elapsed'] += SIMULATION_TIME_STEP
 
     for mission_id in missions_to_complete:
@@ -257,10 +240,13 @@ def update_simulation(state, planners):
         drone = state['drones'][drone_id]
         
         if drone['status'] != 'EMERGENCY_RETURN':
+            logging.info(f"MISSION COMPLETE: {drone_id} finished {mission_id}. Final battery: {drone['battery']:.2f}Wh.")
             actual_duration = state['simulation_time'] - mission.get('start_time', 0)
             actual_energy = mission.get('start_battery', DRONE_BATTERY_WH) - drone['battery']
             state['completed_missions_log'].append({"mission_id": mission_id, "drone_id": drone_id, "completion_timestamp": float(state['simulation_time']), "planned_duration_sec": float(mission.get('total_planned_time', 0)), "actual_duration_sec": float(actual_duration), "planned_energy_wh": float(mission.get('total_planned_energy', 0)), "actual_energy_wh": float(actual_energy), "number_of_stops": len(mission.get('stops', [])), "outcome": "Completed"})
             state['completed_missions'][mission_id] = mission
+        else:
+             logging.info(f"EMERGENCY LANDING: {drone_id} completed emergency mission {mission_id}. Final battery: {drone['battery']:.2f}Wh.")
             
         end_hub_id = mission.get('end_hub')
         if end_hub_id:
@@ -276,23 +262,43 @@ def update_simulation(state, planners):
         
         if mission_id in state['active_missions']: del state['active_missions'][mission_id]
     
-    # FIX: After all drone updates, clear the one-time NFZ event flag.
     if planners['env'].was_nfz_just_added:
         planners['env'].was_nfz_just_added = False
+
+def _get_in_process_orders(current_state):
+    in_process_orders = []
+    drones_by_id = {d['id']: d for d in current_state.get('drones', {}).values()}
+    for mission in current_state.get('active_missions', {}).values():
+        if mission.get('stops') and mission.get('order_ids'):
+            drone = drones_by_id.get(mission['drone_id'])
+            if drone and drone['status'] in ['EN ROUTE', 'PERFORMING_DELIVERY']:
+                current_stop_idx = mission.get('current_stop_index', 0)
+                if current_stop_idx < len(mission['stops']):
+                    stop = mission['stops'][current_stop_idx]
+                    in_process_orders.append({
+                        'order_id': stop.get('id', 'N/A'),
+                        'drone_id': mission['drone_id'],
+                        'dest_name': stop.get('dest_name', 'N/A'),
+                        'status': drone['status']
+                    })
+    return in_process_orders
 
 async def broadcast_state():
     if connected_clients:
         state_snapshot = {}
         plotly_data = None
+        in_process_orders = []
         with state_lock:
             state_snapshot = json.loads(json.dumps(state, cls=system_state.NumpyJSONEncoder))
             if planners:
                 plotly_data = generate_plotly_data(state, planners['coord_manager'], planners['env'])
+            in_process_orders = _get_in_process_orders(state_snapshot)
 
         full_message = {
             'simulation_state': state_snapshot,
             'drone_list': list(state_snapshot.get('drones', {}).values()),
-            'plotly_data': plotly_data
+            'plotly_data': plotly_data,
+            'in_process_orders': in_process_orders
         }
         state_json = json.dumps(full_message)
 
@@ -326,6 +332,43 @@ async def websocket_endpoint(websocket: WebSocket):
                             response_message = {"type": "order_out_of_range", "payload": {"order_id": order_id}}
                         else:
                             state['pending_orders'][order_id] = order
+                elif command == "dispatch_batch":
+                    pending_orders = list(state['pending_orders'].values())
+                    idle_drones = [d for d in state['drones'].values() if d['status'] == 'IDLE']
+                    
+                    if not pending_orders or not idle_drones:
+                        logging.warning("Batch dispatch requested, but no pending orders or idle drones available.")
+                    else:
+                        logging.info(f"Initiating batch dispatch for {len(pending_orders)} orders with {len(idle_drones)} drones.")
+                        tours = planners['vrp_solver'].generate_tours(idle_drones, pending_orders)
+                        
+                        dispatched_order_ids = set()
+                        for tour in tours:
+                            drone = state['drones'][tour['drone_id']]
+                            start_hub_id = tour['start_hub_id']
+                            end_hub_id = tour['end_hub_id']
+                            end_hub_loc = get_hub_by_id(end_hub_id)['location']
+                            
+                            mission_id = f"M-VRP-{uuid.uuid4().hex[:6]}"
+                            mission_obj = Mission(
+                                mission_id=mission_id,
+                                drone_id=tour['drone_id'],
+                                start_pos=drone['pos'],
+                                destinations=[s['pos'] for s in tour['stops']] + [end_hub_loc],
+                                payload_kg=tour['payload'],
+                                order_ids=[s['id'] for s in tour['stops']]
+                            )
+                            mission_obj.stops = tour['stops']
+                            mission_obj.start_hub = start_hub_id
+                            mission_obj.end_hub = end_hub_id
+                            
+                            planners['fleet_manager'].add_mission_to_queue(mission_obj)
+                            dispatched_order_ids.update(mission_obj.order_ids)
+                        
+                        for order_id in dispatched_order_ids:
+                            if order_id in state['pending_orders']:
+                                del state['pending_orders'][order_id]
+                        logging.info(f"VRP created {len(tours)} missions for {len(dispatched_order_ids)} orders.")
                 elif command == "reset_simulation":
                     state.update(system_state.reset_state_file())
                 elif command == "toggle_simulation":

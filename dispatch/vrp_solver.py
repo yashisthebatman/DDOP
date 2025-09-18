@@ -16,10 +16,12 @@ class VRPSolver:
 
     def _create_data_model(self, drones: List[Dict], orders: List[Dict]) -> Dict:
         """Prepares the data for the Multi-Depot VRP solver."""
-        hub_names = list(HUBS.keys())
-        hub_map = {name: i for i, name in enumerate(hub_names)}
+        # --- MODIFIED: Use hub IDs for mapping, consistent with the rest of the system ---
+        hub_ids = [h['id'] for h in HUBS]
+        hub_locations = [h['location'] for h in HUBS]
+        hub_map = {hub_id: i for i, hub_id in enumerate(hub_ids)}
         
-        all_hubs_pos = list(HUBS.values())
+        all_hubs_pos = hub_locations
         all_orders_pos = [order['pos'] for order in orders]
         locations = all_hubs_pos + all_orders_pos
 
@@ -64,7 +66,8 @@ class VRPSolver:
             'starts': starts,
             'ends': ends,
             'num_locations': num_locations + 1,
-            'hub_names': hub_names
+            'hub_ids': hub_ids, # --- MODIFIED: Store IDs instead of names
+            'hub_locations': hub_locations
         }
         return data
 
@@ -116,7 +119,7 @@ class VRPSolver:
             return []
 
         tours = []
-        num_hubs = len(data['hub_names'])
+        num_hubs = len(data['hub_ids'])
         
         for vehicle_id in range(data['num_vehicles']):
             index = routing.Start(vehicle_id)
@@ -132,11 +135,16 @@ class VRPSolver:
             # A valid route must have a start and at least one stop.
             if len(route) <= 1: continue
 
-            # Determine the optimal end hub based on the last actual stop.
+            # --- MODIFIED: Determine optimal end hub based on proximity to last stop ---
             last_real_node = route[-1]
             if last_real_node >= num_hubs:
                 last_stop_pos = order_map[last_real_node]['pos']
-                end_hub_id = min(HUBS, key=lambda h: np.linalg.norm(np.array(HUBS[h]) - np.array(last_stop_pos)))
+                # Calculate distance to all hubs and pick the closest one
+                closest_hub_idx = np.argmin([
+                    np.linalg.norm(np.array(last_stop_pos) - np.array(hub_loc)) 
+                    for hub_loc in data['hub_locations']
+                ])
+                end_hub_id = data['hub_ids'][closest_hub_idx]
             else: # The route was just hub-to-hub (empty)
                 continue
             

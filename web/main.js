@@ -78,7 +78,8 @@ function updateUI(message) {
 
     updateDroneStatusList(drones);
     updatePendingOrdersTable(Object.values(state.pending_orders || {}));
-    updateInProcessOrdersTable(Object.values(state.active_missions || {}), drones); // Call the new function
+    // --- SIMPLIFIED: Use pre-computed data from the backend ---
+    updateInProcessOrdersTable(message.in_process_orders || []);
     updateCompletedMissionsTable(state.completed_missions_log || []);
     updateEventLog(state.log || []);
 }
@@ -134,33 +135,9 @@ function updatePendingOrdersTable(orders) {
     tableBody.innerHTML = html;
 }
 
-// Corrected function to update the "In Process Orders" table
-function updateInProcessOrdersTable(missions, allDrones) {
+// --- SIMPLIFIED: This function now just renders the data from the backend ---
+function updateInProcessOrdersTable(inProcessOrders) {
     const tableBody = document.querySelector("#inProcessOrdersTable tbody");
-    const inProcessOrders = [];
-    const dronesById = Object.fromEntries(allDrones.map(d => [d.id, d]));
-
-    missions.forEach(mission => {
-        // Only include orders from non-rebalancing/emergency missions that have stops
-        if (mission.stops && mission.stops.length > 0 && mission.order_ids.length > 0) {
-            const drone = dronesById[mission.drone_id];
-            // An order is "in process" if the drone is en-route or delivering
-            if (drone && (drone.status === 'EN ROUTE' || drone.status === 'PERFORMING_DELIVERY')) {
-                // Find the current stop for this mission
-                const currentStopIndex = mission.current_stop_index || 0;
-                if (currentStopIndex < mission.stops.length) {
-                    const stop = mission.stops[currentStopIndex];
-                    inProcessOrders.push({
-                        order_id: stop.id,
-                        drone_id: mission.drone_id,
-                        dest_name: stop.dest_name || 'N/A', 
-                        status: drone.status
-                    });
-                }
-            }
-        }
-    });
-
     if (inProcessOrders.length === 0) {
         tableBody.innerHTML = `<tr><td colspan="4" style="text-align:center;">No orders in process</td></tr>`;
         return;
@@ -218,6 +195,11 @@ function setupEventListeners() {
         if (confirm("Are you sure? This will reset all simulation progress.")) {
             sendCommand('reset_simulation');
         }
+    });
+    // --- NEW: Event listener for the batch dispatch button ---
+    document.getElementById('batchDispatchButton').addEventListener('click', () => {
+        showNotification('Initiating batch dispatch...', 'info');
+        sendCommand('dispatch_batch');
     });
 
     const addOrderForm = document.getElementById('addOrderForm');
