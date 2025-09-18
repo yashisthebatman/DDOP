@@ -66,6 +66,7 @@ DRONE_MASS_KG = 2.0
 ASCENT_EFFICIENCY = 0.7
 GRAVITY = 9.81
 TURN_ENERGY_FACTOR = 0.005
+# NOTE: These power values are also used for calculating hover/delivery maneuver energy drain.
 DRONE_BASE_POWER_WATTS = 50.0
 DRONE_ADDITIONAL_WATTS_PER_KG = 10.0
 RTH_BATTERY_THRESHOLD_FACTOR = 1.5

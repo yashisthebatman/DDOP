@@ -110,7 +110,9 @@ def test_system_reacts_to_dynamic_nfz_mid_mission(real_environment, real_fleet_m
     real_environment.add_dynamic_nfz(nfz_bounds)
     
     planners_dict = {"env": real_environment, "predictor": real_fleet_manager.predictor, "coord_manager": real_environment.coord_manager}
-    contingency_planner.check_for_contingencies(state, planners_dict)
     
-    # FIX: The outcome can be a successful emergency return or a critical failure if trapped. Both are valid.
+    # FIX: Call the function correctly, passing the drone object.
+    drone_to_check = state['drones'][drone_id]
+    contingency_planner.check_for_contingencies(state, planners_dict, drone_to_check)
+    
     assert state['drones'][drone_id]['status'] in ['EMERGENCY_RETURN', 'CRITICAL_FAILURE']

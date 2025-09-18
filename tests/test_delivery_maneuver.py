@@ -7,6 +7,7 @@ from system_state import get_initial_state
 from config import DELIVERY_MANEUVER_TIME_SEC, SIMULATION_TIME_STEP, HUBS
 from utils.coordinate_manager import CoordinateManager
 from server import update_simulation
+from ml_predictor.predictor import EnergyTimePredictor # Import for spec
 
 def get_hub_by_id(hub_id):
     return next((h for h in HUBS if h['id'] == hub_id), None)
@@ -31,11 +32,16 @@ def test_state():
 
 @pytest.fixture
 def mock_planners():
-    # MODIFIED: Expanded mock to support contingency checks within update_simulation
     env_mock = MagicMock()
+    env_mock.weather = MagicMock() # Add nested weather mock
+    env_mock.weather.get_wind_at_location.return_value = np.array([0,0,0])
     env_mock.was_nfz_just_added = False
-    predictor_mock = MagicMock()
-    predictor_mock.predict.return_value = (10.0, 5.0) # Default safe values
+    
+    # FIX: Create a fully structured mock to prevent ValueError
+    predictor_mock = MagicMock(spec=EnergyTimePredictor)
+    predictor_mock.fallback_predictor = MagicMock()
+    predictor_mock.fallback_predictor.predict.return_value = (0.1, 0.1) 
+
     return {
         "coord_manager": CoordinateManager(),
         "env": env_mock,

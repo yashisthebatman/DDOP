@@ -37,7 +37,7 @@ def active_mission_state():
         'status': 'EN ROUTE',
         'mission_id': mission_id,
         'pos': (-74.0, 40.72, 50),
-        'battery': 100.0 # Start with plenty of battery
+        'battery': 100.0
     })
     
     state['active_missions'][mission_id] = {
@@ -45,7 +45,7 @@ def active_mission_state():
         'drone_id': drone_id,
         'order_ids': ['OrderY'],
         'stops': [{'id': 'OrderY', 'pos': (-74.0, 40.73, 50), 'payload_kg': 1.0}],
-        'destinations': [(-74.0, 40.73, 50), hub_a_loc], # Delivery and return
+        'destinations': [(-74.0, 40.73, 50), hub_a_loc],
         'start_time': 0,
         'payload_kg': 1.0,
         'start_battery': 200.0
@@ -54,30 +54,21 @@ def active_mission_state():
     return state
 
 def test_in_flight_low_battery_triggers_emergency_return(active_mission_state, mock_planners):
-    """
-    Verify that if a drone's battery drops below the safety threshold mid-flight,
-    the contingency planner correctly triggers an emergency return.
-    """
     state = active_mission_state
     
-    # Mock predictor to report energy costs that will fail the check.
-    # Energy to finish mission = 30Wh. Energy to return after = 20Wh.
-    # Total required with RTH_FACTOR=1.5 is (30 + 20) * 1.5 = 75Wh.
-    # MODIFIED: Use return_value instead of side_effect to handle all calls.
-    # This single return value will be used for the two checks and the emergency path calculation.
     mock_planners['predictor'].predict.return_value = (100.0, 30.0)
     
-    # Set drone's battery to a value that is NOT enough to meet the safety margin.
     state['drones']['Drone 1']['battery'] = 74.0
     
-    # Run the check
-    check_for_contingencies(state, mock_planners)
+    # FIX: Call the function correctly, passing the specific drone.
+    drone_to_check = state['drones']['Drone 1']
+    contingency_triggered = check_for_contingencies(state, mock_planners, drone_to_check)
     
-    # Assertions
+    assert contingency_triggered is True
     drone = state['drones']['Drone 1']
     assert drone['status'] == 'EMERGENCY_RETURN'
-    assert 'M-TEST-BATT' not in state['active_missions'] # Original mission aborted
-    assert 'OrderY' in state['pending_orders'] # Order returned to queue
+    assert 'M-TEST-BATT' not in state['active_missions']
+    assert 'OrderY' in state['pending_orders']
     assert len(state['completed_missions_log']) == 1
     assert state['completed_missions_log'][0]['outcome'] == 'Failed: Critically Low Battery'
     assert drone['mission_id'].startswith('EM-')

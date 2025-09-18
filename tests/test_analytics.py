@@ -10,6 +10,7 @@ from server import update_simulation
 from system_state import get_initial_state
 from config import DRONE_BATTERY_WH, DRONE_RECHARGE_TIME_S, HUBS
 from utils.coordinate_manager import CoordinateManager
+from ml_predictor.predictor import EnergyTimePredictor # FIX: Add missing import
 
 # Helper to get hub by ID
 def get_hub_by_id(hub_id):
@@ -37,7 +38,6 @@ def test_mission_log_creation_on_completion():
     
     state['drones'][drone_id].update({'status': 'EN ROUTE', 'mission_id': mission_id, 'pos': (-74.0, 40.7, 50)})
     
-    # FIX: Get hub location from new list format
     end_hub_obj = get_hub_by_id("HUB_A")
     end_hub_pos = end_hub_obj['location']
     
@@ -46,14 +46,16 @@ def test_mission_log_creation_on_completion():
         'total_planned_time': 200.0, 'total_planned_energy': 45.0, 'path_world_coords': [(-74.0, 40.7, 50), end_hub_pos],
         'destinations': [end_hub_pos], 'start_battery': DRONE_BATTERY_WH, 'mission_time_elapsed': 0.0,
         'flight_time_elapsed': 0.0, 'total_maneuver_time': 0, 'stops': [], 'current_stop_index': 0,
-        'end_hub': end_hub_obj['id']
+        'end_hub': end_hub_obj['id'], 'current_path_target_index': 1
     }
     
-    # MODIFIED: Create a more complete mock planners dict to satisfy the contingency checker.
     env_mock = MagicMock()
+    env_mock.weather = MagicMock() # Add nested weather mock
+    env_mock.weather.get_wind_at_location.return_value = np.array([0,0,0])
     env_mock.was_nfz_just_added = False
-    predictor_mock = MagicMock()
-    predictor_mock.predict.return_value = (10.0, 5.0) # a default safe value
+    predictor_mock = MagicMock(spec=EnergyTimePredictor)
+    predictor_mock.fallback_predictor = MagicMock()
+    predictor_mock.fallback_predictor.predict.return_value = (0.1, 0.1)
     mock_planners = {
         "coord_manager": CoordinateManager(),
         "env": env_mock,
