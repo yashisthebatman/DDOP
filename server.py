@@ -151,8 +151,12 @@ def update_simulation(state, planners):
         if drone['status'] == 'PERFORMING_DELIVERY':
             # IMPLANTED LOGGING
             logging.info(f"[SIM_LOOP] Drone {drone['id']} is PERFORMING_DELIVERY. Time: {state['simulation_time']:.1f}, Maneuver complete at: {mission.get('maneuver_complete_at', 'N/A')}")
-            # IMPLANTED LOGGING: Highlighting the missing energy drain logic which is the likely bug
-            logging.warning(f"[SIM_LOOP] DEBUG NOTE: No battery drain logic is implemented for the PERFORMING_DELIVERY state. Battery remains at {drone['battery']:.2f}Wh.")
+            
+            # Calculate and apply energy drain for hovering during delivery.
+            payload_kg = mission.get('payload_kg', 0.0) if mission else 0.0
+            hover_power_watts = DRONE_BASE_POWER_WATTS + (payload_kg * DRONE_ADDITIONAL_WATTS_PER_KG)
+            energy_drain_wh = (hover_power_watts * SIMULATION_TIME_STEP) / 3600.0
+            drone['battery'] = max(0, drone['battery'] - energy_drain_wh)
             
             if state['simulation_time'] >= mission.get('maneuver_complete_at', float('inf')):
                 stop_idx = mission.get('current_stop_index', 0)
@@ -190,16 +194,34 @@ def update_simulation(state, planners):
             path = mission.get('path_world_coords', [])
             if not path or mission['current_path_target_index'] >= len(path): continue
 
+            # --- START: SOLUTION FOR SECOND BUG ---
+            # Store current position before calculating movement
+            start_pos_of_tick = drone['pos']
+            current_pos_np = np.array(start_pos_of_tick)
+
             target_waypoint = np.array(path[mission['current_path_target_index']])
-            current_pos_np = np.array(drone['pos'])
             direction = target_waypoint - current_pos_np
             dist_to_wp = np.linalg.norm(direction)
             move_dist = DRONE_SPEED_MPS * SIMULATION_TIME_STEP
+
+            # Calculate the new position
             if dist_to_wp < move_dist:
-                drone['pos'] = tuple(target_waypoint.tolist())
+                new_pos = tuple(target_waypoint.tolist())
                 mission['current_path_target_index'] += 1
             else:
-                drone['pos'] = tuple((current_pos_np + (direction / dist_to_wp) * move_dist).tolist())
+                new_pos = tuple((current_pos_np + (direction / dist_to_wp) * move_dist).tolist())
+
+            # Apply a differential (per-tick) energy drain for the movement
+            predictor = planners['predictor']
+            current_wind = planners['env'].weather.get_wind_at_location(*start_pos_of_tick)
+            payload_kg = mission.get('payload_kg', 0.0)
+            
+            _, energy_drain_wh = predictor.predict(start_pos_of_tick, new_pos, payload_kg, current_wind)
+            drone['battery'] = max(0, drone['battery'] - energy_drain_wh)
+            
+            # Update the drone's position after all calculations
+            drone['pos'] = new_pos
+            # --- END: SOLUTION FOR SECOND BUG ---
 
             if drone['status'] == 'EN ROUTE':
                 stop_idx = mission.get('current_stop_index', 0)
@@ -223,10 +245,8 @@ def update_simulation(state, planners):
                     missions_to_complete.append(mission_id)
                     continue
             
+            # Keep flight time for logging, but remove the flawed proportional battery logic
             mission['flight_time_elapsed'] += SIMULATION_TIME_STEP
-            flight_time = max(1, mission.get('total_planned_time', 1))
-            progress = min(1.0, mission['flight_time_elapsed'] / flight_time)
-            drone['battery'] = mission.get('start_battery', DRONE_BATTERY_WH) - (progress * mission.get('total_planned_energy', 0))
 
     for mission_id in missions_to_complete:
         mission = state.get('active_missions', {}).get(mission_id)
