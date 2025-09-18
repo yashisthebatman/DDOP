@@ -33,15 +33,12 @@ def test_state():
 @pytest.fixture
 def mock_planners():
     env_mock = MagicMock()
-    env_mock.weather = MagicMock() # Add nested weather mock
+    env_mock.weather = MagicMock()
     env_mock.weather.get_wind_at_location.return_value = np.array([0,0,0])
     env_mock.was_nfz_just_added = False
-    
-    # FIX: Create a fully structured mock to prevent ValueError
+    # FIX: Correctly mock the predictor to prevent ValueError
     predictor_mock = MagicMock(spec=EnergyTimePredictor)
-    predictor_mock.fallback_predictor = MagicMock()
-    predictor_mock.fallback_predictor.predict.return_value = (0.1, 0.1) 
-
+    predictor_mock.predict.return_value = (10.0, 5.0) # Default safe values
     return {
         "coord_manager": CoordinateManager(),
         "env": env_mock,

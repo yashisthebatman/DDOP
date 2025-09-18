@@ -10,21 +10,20 @@ from config import HUBS
 from utils.coordinate_manager import CoordinateManager
 from ml_predictor.predictor import EnergyTimePredictor # Import for spec
 
+# Helper to get hub by ID from the new config format
 def get_hub_by_id(hub_id):
     return next((hub for hub in HUBS if hub['id'] == hub_id), None)
 
 @pytest.fixture
 def mock_planners():
+    """Provides a mock planners dict needed by the real update_simulation."""
     env_mock = MagicMock()
-    env_mock.weather = MagicMock() # Add nested weather mock
+    env_mock.weather = MagicMock()
     env_mock.weather.get_wind_at_location.return_value = np.array([0,0,0])
     env_mock.was_nfz_just_added = False
-    
-    # FIX: Create a fully structured mock to prevent ValueError
+    # FIX: Correctly mock the predictor to prevent ValueError
     predictor_mock = MagicMock(spec=EnergyTimePredictor)
-    predictor_mock.fallback_predictor = MagicMock()
-    predictor_mock.fallback_predictor.predict.return_value = (0.1, 0.1)
-    
+    predictor_mock.predict.return_value = (10.0, 5.0) # Default safe values
     return {
         "coord_manager": CoordinateManager(),
         "env": env_mock,
@@ -34,10 +33,10 @@ def mock_planners():
 def test_drone_relocates_after_rebalance_mission(mock_planners):
     """Simulate a rebalancing mission and assert drone's home hub is updated."""
     state = get_initial_state()
-    drone_id = "Drone 1"
+    drone_id = "Drone 1" # From HUB_A
     drone = state['drones'][drone_id]
     
-    drone['status'] = 'RETURNING_TO_HUB'
+    drone['status'] = 'RETURNING_TO_HUB' # Final leg of mission
     drone['mission_id'] = 'M-REBALANCE'
     drone['home_hub'] = 'HUB_A'
     
