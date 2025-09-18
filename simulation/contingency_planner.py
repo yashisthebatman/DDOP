@@ -30,9 +30,10 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
     drone = state['drones'][drone_id]
     if drone['status'] in ['EMERGENCY_RETURN', 'CRITICAL_FAILURE']:
         return
-        
+    
+    # IMPLANTED LOGGING
+    logging.critical(f"\n[CONTINGENCY] >>> TRIGGERING EMERGENCY for {drone_id} at t={state['simulation_time']:.1f}. Reason: {reason}. Current Status: {drone['status']} <<<\n")
     original_mission_id = drone['mission_id']
-    logging.info(f"[DEBUG] Tick {state['simulation_time']:.1f}: CONTINGENCY TRIGGERED for {drone_id} on mission {original_mission_id}. Reason: {reason}. Current status: {drone['status']}")
     
     original_mission = state['active_missions'].get(original_mission_id)
     log_event(state, f"⚠️ CONTINGENCY: {drone_id} entering EMERGENCY_RETURN due to: {reason}.")
@@ -43,10 +44,13 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
                 state['pending_orders'][order_details['id']] = order_details
                 orders_returned += 1
         if orders_returned > 0:
-            log_event(state, f"Returned {orders_returned} orders from failed mission {original_mission_id} to queue.")
+            # IMPLANTED LOGGING
+            logging.info(f"[CONTINGENCY] Returned {orders_returned} orders (IDs: {[o['id'] for o in original_mission.get('stops', [])]}) from failed mission {original_mission_id} to pending queue.")
         log_entry = { "mission_id": original_mission_id, "drone_id": drone_id, "completion_timestamp": state['simulation_time'], "outcome": f"Failed: {reason}", "planned_duration_sec": original_mission.get('total_planned_time', 0), "actual_duration_sec": state['simulation_time'] - original_mission.get('start_time', 0), "planned_energy_wh": original_mission.get('total_planned_energy', 0), "actual_energy_wh": original_mission.get('start_battery', 0) - drone['battery'], "number_of_stops": len(original_mission.get('stops', [])), }
         state['completed_missions_log'].append(log_entry)
         if original_mission_id in state['active_missions']:
+            # IMPLANTED LOGGING
+            logging.info(f"[CONTINGENCY] Deleting original mission '{original_mission_id}' from active_missions.")
             del state['active_missions'][original_mission_id]
 
     coord_manager = planners['coord_manager']
@@ -55,6 +59,9 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
         log_event(state, f"CRITICAL: {drone_id} could not find a hub to return to!")
         drone['status'] = 'CRITICAL_FAILURE' 
         return
+    
+    # IMPLANTED LOGGING
+    logging.info(f"[CONTINGENCY] Planning new emergency path for {drone_id} from {drone['pos']} to nearest hub {hub_id} at {hub_pos}.")
         
     planner = SingleAgentPlanner(planners['env'], planners['predictor'], coord_manager)
     path, status = planner.find_strategic_path_rrt(drone['pos'], hub_pos)
@@ -74,6 +81,8 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
             
     emergency_mission_id = f"EM-{uuid.uuid4().hex[:6]}"
     emergency_mission = { 'mission_id': emergency_mission_id, 'drone_id': drone_id, 'order_ids': [], 'stops': [], 'start_pos': drone['pos'], 'destinations': [hub_pos], 'payload_kg': 0, 'path_world_coords': path, 'total_planned_time': total_time, 'total_planned_energy': total_energy, 'start_time': state['simulation_time'], 'start_battery': drone['battery'], 'mission_time_elapsed': 0.0, 'flight_time_elapsed': 0.0, 'total_maneuver_time': 0, 'end_hub': hub_id }
+    # IMPLANTED LOGGING
+    logging.info(f"[CONTINGENCY] Created new emergency mission '{emergency_mission_id}' for {drone_id}. Setting status to EMERGENCY_RETURN.")
     state['active_missions'][emergency_mission_id] = emergency_mission
     drone['status'] = 'EMERGENCY_RETURN'
     drone['mission_id'] = emergency_mission_id
@@ -83,6 +92,8 @@ def check_for_contingencies(state: Dict, planners: Dict, drone: Dict) -> bool:
     Checks a single drone for low-battery or path invalidation contingencies.
     Returns True if a contingency was triggered, False otherwise.
     """
+    # IMPLANTED LOGGING
+    logging.info(f"[CONTINGENCY] Checking drone {drone['id']}. Status: {drone['status']}, Battery: {drone['battery']:.2f}Wh.")
     # FIX: Check includes PERFORMING_DELIVERY to catch low-battery issues during the maneuver.
     if drone['status'] not in ['EN ROUTE', 'RETURNING_TO_HUB', 'PERFORMING_DELIVERY']:
         return False
@@ -104,19 +115,33 @@ def check_for_contingencies(state: Dict, planners: Dict, drone: Dict) -> bool:
         hover_power_watts = DRONE_BASE_POWER_WATTS + (mission.get('payload_kg', 0) * DRONE_ADDITIONAL_WATTS_PER_KG)
         energy_to_finish_mission = (hover_power_watts * remaining_maneuver_time_s) / 3600.0
         pos_for_return_calc = mission['stops'][mission['current_stop_index']]['pos']
+        # IMPLANTED LOGGING
+        logging.info(f"[CONTINGENCY] Drone {drone_id} is delivering. Remaining maneuver time: {remaining_maneuver_time_s:.1f}s. Energy for maneuver: {energy_to_finish_mission:.3f}Wh.")
     else: # EN ROUTE or RETURNING_TO_HUB
         pos_for_return_calc = mission['destinations'][-1]
         payload = mission.get('payload_kg', 0.0)
         current_wind = env.weather.get_wind_at_location(*drone['pos'])
         _, energy_to_finish_mission = predictor.predict(drone['pos'], pos_for_return_calc, payload, current_wind)
+        # IMPLANTED LOGGING
+        logging.info(f"[CONTINGENCY] Drone {drone_id} is en route. Energy to reach {pos_for_return_calc}: {energy_to_finish_mission:.3f}Wh.")
     
     _, nearest_hub_pos = _find_nearest_hub(pos_for_return_calc, coord_manager)
     if nearest_hub_pos:
         return_wind = env.weather.get_wind_at_location(*pos_for_return_calc)
         _, energy_to_return_to_hub = predictor.predict(pos_for_return_calc, nearest_hub_pos, 0, return_wind)
         required_energy = (energy_to_finish_mission + energy_to_return_to_hub) * RTH_BATTERY_THRESHOLD_FACTOR
+        trigger_emergency = drone['battery'] < required_energy
         
-        if drone['battery'] < required_energy:
+        # IMPLANTED LOGGING
+        logging.info(
+            f"[CONTINGENCY] Low Batt Check for {drone_id}: "
+            f"Has {drone['battery']:.2f}Wh | "
+            f"Needs {(energy_to_finish_mission + energy_to_return_to_hub):.2f}Wh (Finish: {energy_to_finish_mission:.2f} + RTH: {energy_to_return_to_hub:.2f}) "
+            f"-> Required with safety factor ({RTH_BATTERY_THRESHOLD_FACTOR}x): {required_energy:.2f}Wh. "
+            f"Trigger Emergency: {trigger_emergency}"
+        )
+        
+        if trigger_emergency:
             _trigger_emergency_return(state, drone_id, "Critically Low Battery", planners)
             return True
 

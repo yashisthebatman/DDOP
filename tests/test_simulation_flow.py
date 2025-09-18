@@ -2,6 +2,7 @@
 import pytest
 import time
 import threading
+import logging
 from unittest.mock import MagicMock, patch
 
 from config import HUBS, DESTINATIONS, DRONE_BATTERY_WH
@@ -127,6 +128,7 @@ def test_failed_mission_lifecycle(test_dependencies):
         update_simulation(state, planners)
     
     # Manually inject a battery fault to trigger the contingency
+    logging.info(f"\n\n[TEST_LOG] >>> INJECTING FAULT at t={state['simulation_time']:.1f}. Setting battery for {assigned_drone_id} to 10.0Wh. Position: {state['drones'][assigned_drone_id]['pos']}\n\n")
     state['drones'][assigned_drone_id]['battery'] = 10.0
 
     # The nearest hub to StuyTown is Hub B, not the original Hub A
@@ -135,9 +137,20 @@ def test_failed_mission_lifecycle(test_dependencies):
     
     # Run simulation to completion
     loop_count = 0
+    logging.info(f"\n[TEST_LOG] >>> STARTING FINAL SIMULATION LOOP <<<\n")
     while state['active_missions'] and loop_count < 5000:
+        # IMPLANTED LOGGING
+        drone_state = state['drones'][assigned_drone_id]
+        logging.info(
+            f"[TEST_TICK] t={state['simulation_time']:.1f}, "
+            f"Drone: {drone_state['id']}, "
+            f"Status: {drone_state['status']}, "
+            f"Battery: {drone_state['battery']:.2f}Wh, "
+            f"Pos: ({drone_state['pos'][0]:.4f}, {drone_state['pos'][1]:.4f}, {drone_state['pos'][2]:.1f})"
+        )
         update_simulation(state, planners)
         loop_count += 1
+    logging.info(f"\n[TEST_LOG] >>> FINAL SIMULATION LOOP ENDED after {loop_count} ticks. Final sim time: {state['simulation_time']:.1f} <<<\n")
         
     assert loop_count < 5000, "Simulation timed out"
     

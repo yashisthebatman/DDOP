@@ -130,8 +130,15 @@ def update_simulation(state, planners):
     missions_to_complete = []
     # Loop over a copy of drones as their state/mission can change mid-loop
     for drone in list(state['drones'].values()):
+        # IMPLANTED LOGGING
+        logging.info(f"[SIM_LOOP] ---- Processing drone {drone['id']} at t={state['simulation_time']:.1f} ----")
+        
         # Perform per-drone contingency check
-        if contingency_planner.check_for_contingencies(state, planners, drone):
+        contingency_triggered = contingency_planner.check_for_contingencies(state, planners, drone)
+        # IMPLANTED LOGGING
+        logging.info(f"[SIM_LOOP] Contingency check for {drone['id']} returned: {contingency_triggered}. Drone status is now: {drone['status']}")
+
+        if contingency_triggered:
             continue # Skip normal update if a contingency was handled
 
         mission_id = drone.get('mission_id')
@@ -142,12 +149,18 @@ def update_simulation(state, planners):
         if 'current_path_target_index' not in mission: mission['current_path_target_index'] = 1
         
         if drone['status'] == 'PERFORMING_DELIVERY':
+            # IMPLANTED LOGGING
+            logging.info(f"[SIM_LOOP] Drone {drone['id']} is PERFORMING_DELIVERY. Time: {state['simulation_time']:.1f}, Maneuver complete at: {mission.get('maneuver_complete_at', 'N/A')}")
+            # IMPLANTED LOGGING: Highlighting the missing energy drain logic which is the likely bug
+            logging.warning(f"[SIM_LOOP] DEBUG NOTE: No battery drain logic is implemented for the PERFORMING_DELIVERY state. Battery remains at {drone['battery']:.2f}Wh.")
+            
             if state['simulation_time'] >= mission.get('maneuver_complete_at', float('inf')):
                 stop_idx = mission.get('current_stop_index', 0)
                 if 0 <= stop_idx < len(mission.get('stops', [])):
                     completed_order_id = mission['stops'][stop_idx]['id']
                     if completed_order_id not in state['completed_orders']:
-                        logging.info(f"[DEBUG] Tick {state['simulation_time']:.1f}: COMPLETING order '{completed_order_id}' for mission {mission_id}.")
+                        # IMPLANTED LOGGING
+                        logging.critical(f"[SIM_LOOP] >>> COMPLETING ORDER <<< Order '{completed_order_id}' is being marked as complete for mission {mission_id}.")
                         state['completed_orders'].append(completed_order_id)
                 
                 mission['current_stop_index'] += 1
@@ -194,7 +207,8 @@ def update_simulation(state, planners):
                     delivery_pos = mission['stops'][stop_idx]['pos']
                     dist_to_delivery = calculate_distance_3d(coord_manager.world_to_meters(drone['pos']), coord_manager.world_to_meters(delivery_pos))
                     if dist_to_delivery < 5.0:
-                        logging.info(f"[DEBUG] Tick {state['simulation_time']:.1f}: Drone {drone['id']} arrived at destination. Status -> PERFORMING_DELIVERY.")
+                        # IMPLANTED LOGGING
+                        logging.info(f"[SIM_LOOP] >>> ARRIVAL <<< Drone {drone['id']} arrived at destination. Distance: {dist_to_delivery:.2f}m. Changing status to PERFORMING_DELIVERY.")
                         drone['status'] = 'PERFORMING_DELIVERY'
                         mission['maneuver_complete_at'] = state['simulation_time'] + DELIVERY_MANEUVER_TIME_SEC
                         continue
