@@ -102,8 +102,8 @@ def test_full_mission_lifecycle(test_dependencies):
 
 def test_failed_mission_lifecycle(test_dependencies):
     """
-    Ensures that when a mission fails mid-flight, the order is requeued,
-    the failure is logged, and the drone correctly returns to the NEAREST hub.
+    Ensures that when a mission fails mid-flight due to a critical battery fault,
+    the order is correctly requeued and the drone diverts to the NEAREST hub.
     """
     state = test_dependencies['state']
     fm = test_dependencies['fleet_manager']
@@ -111,7 +111,7 @@ def test_failed_mission_lifecycle(test_dependencies):
     planners = test_dependencies['planners']
 
     order = {'id': "OrderFail", 'pos': DESTINATIONS['StuyTown Apartments'], 'payload_kg': 1.0, 'dest_name': 'StuyTown Apartments'}
-    hub_id = "HUB_A"
+    hub_id = "HUB_A" # Start from a hub that is NOT the closest to the destination
     status = dispatcher.dispatch_order(state, order, hub_id)
     assert status == "dispatched"
 
@@ -124,21 +124,22 @@ def test_failed_mission_lifecycle(test_dependencies):
     state['drones'][assigned_drone_id].update(plan_results['drone_updates'][assigned_drone_id])
     state['active_missions'][mission_id].update(plan_results['mission_updates'][mission_id])
 
-    # Let the simulation run until the drone is delivering
+    # Let the simulation run until the drone is at the delivery location
     loop_count = 0
     while state['drones'][assigned_drone_id]['status'] != 'PERFORMING_DELIVERY' and loop_count < 1000:
         update_simulation(state, planners)
         loop_count += 1
     assert loop_count < 1000, "Drone never reached destination to start delivery"
 
-    logging.info(f"--- [TEST] Injecting battery fault for {assigned_drone_id} at t={state['simulation_time']:.1f} ---")
-    state['drones'][assigned_drone_id]['battery'] = 10.0
+    logging.info(f"--- [TEST] Injecting critical battery fault for {assigned_drone_id} at t={state['simulation_time']:.1f} ---")
+    # Set battery to a value low enough to trigger emergency immediately, interrupting the delivery.
+    state['drones'][assigned_drone_id]['battery'] = 2.0
 
-    # The nearest hub at the DELIVERY LOCATION is Hub B.
+    # The nearest hub at the DELIVERY LOCATION is Hub B, not the starting Hub A.
     nearest_hub_id_at_delivery = _find_nearest_hub(DESTINATIONS['StuyTown Apartments'], planners['coord_manager'])[0]
     assert nearest_hub_id_at_delivery == "HUB_B"
     
-    # Run simulation to completion
+    # Run simulation to completion. The original mission ID will be deleted, so we loop until no active missions are left.
     loop_count = 0
     logging.info(f"--- [TEST] Resuming simulation to observe contingency handling ---")
     while state['active_missions'] and loop_count < 5000:
@@ -148,19 +149,19 @@ def test_failed_mission_lifecycle(test_dependencies):
         
     assert loop_count < 5000, "Simulation timed out"
     
-    # 1. The delivery completes before the emergency, so the order should be in completed_orders.
-    assert "OrderFail" in state['completed_orders']
-    # 2. Because the order was completed, it should NOT be re-queued.
-    assert "OrderFail" not in state['pending_orders']
+    # 1. The delivery was interrupted, so the order should NOT be in completed_orders.
+    assert "OrderFail" not in state['completed_orders']
+    # 2. Because the mission failed before delivery completion, the order MUST be re-queued.
+    assert "OrderFail" in state['pending_orders']
     
     final_drone_state = state['drones'][assigned_drone_id]
     assert final_drone_state['status'] == 'RECHARGING'
     
-    # --- MODIFIED: THE FINAL FIX FOR THE TEST ---
-    # 3. With the new contingency logic, the emergency triggers WHILE the drone is still
-    #    at the delivery location, ensuring the NEAREST hub is chosen correctly.
+    # 3. The emergency was triggered at the delivery location, so the drone should have
+    #    returned to the nearest hub, which is HUB_B.
     assert final_drone_state['home_hub'] == "HUB_B"
     
     assert len(state['completed_missions_log']) > 0
-    failure_log = next(log for log in state['completed_missions_log'] if log['mission_id'] == mission_id)
+    failure_log = next((log for log in state['completed_missions_log'] if log['mission_id'] == mission_id), None)
+    assert failure_log is not None, "Failure log for the original mission was not created."
     assert "Failed" in failure_log['outcome']

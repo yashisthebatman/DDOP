@@ -5,14 +5,38 @@ from typing import Dict, Any, List, Optional
 import numpy as np
 
 from fleet.manager import Mission, FleetManager
-# FIX: Import the new safety margin config
 from config import HUBS, RTH_BATTERY_THRESHOLD_FACTOR, DISPATCH_ENERGY_SAFETY_MARGIN
 from utils.geometry import calculate_distance_3d
 from ml_predictor.predictor import EnergyTimePredictor
 from utils.coordinate_manager import CoordinateManager
 
+# --- PERFORMANCE REFINEMENT: Pre-compute hub data once ---
+_PROCESSED_HUBS = None
+
+def _initialize_hubs():
+    """
+    Caches hub data, including pre-calculating meter-space coordinates
+    to avoid repeated conversions in performance-critical loops.
+    """
+    global _PROCESSED_HUBS
+    if _PROCESSED_HUBS is None:
+        coord_manager = CoordinateManager()
+        _PROCESSED_HUBS = []
+        for hub_data in HUBS:
+            processed_hub = hub_data.copy()
+            processed_hub['location_m'] = coord_manager.world_to_meters(hub_data['location'])
+            _PROCESSED_HUBS.append(processed_hub)
+        logging.info(f"Pre-computed meter coordinates for {len(_PROCESSED_HUBS)} hubs.")
+
+def get_processed_hubs() -> List[Dict]:
+    """Returns the list of hubs with pre-computed data."""
+    if _PROCESSED_HUBS is None:
+        _initialize_hubs()
+    return _PROCESSED_HUBS
+
 def get_hub_by_id(hub_id: str) -> Optional[Dict]:
-    for hub in HUBS:
+    """Efficiently finds a hub by its ID from the cached list."""
+    for hub in get_processed_hubs():
         if hub['id'] == hub_id:
             return hub
     return None
@@ -26,6 +50,7 @@ class Dispatcher:
         self.fleet_manager = fleet_manager
         self.predictor = predictor
         self.coord_manager = CoordinateManager()
+        _initialize_hubs() # Ensure hubs are processed when Dispatcher is created
 
     def _get_eligible_drones_at_hub(self, state: Dict[str, Any], hub_id: str) -> List[Dict]:
         """Finds all IDLE drones at a specific hub."""
@@ -71,10 +96,10 @@ class Dispatcher:
             return "out_of_range"
         
         scored_drones = []
+        order_pos_m = self.coord_manager.world_to_meters(order['pos'])
         for drone in drones_with_enough_battery:
-            drone_pos_m = self.coord_manager.world_to_meters(drone['pos'])
-            order_pos_m = self.coord_manager.world_to_meters(order['pos'])
-            proximity = calculate_distance_3d(drone_pos_m, order_pos_m)
+            # Drones at a hub are at the same location, so we use the hub's pre-computed meter position
+            proximity = calculate_distance_3d(start_hub['location_m'], order_pos_m)
             score = self._score_drone(drone, proximity)
             scored_drones.append((score, drone))
         
@@ -110,6 +135,10 @@ class Dispatcher:
         from_hub = get_hub_by_id(from_hub_id)
         to_hub = get_hub_by_id(to_hub_id)
         
+        if not from_hub or not to_hub:
+            logging.error(f"Cannot create rebalancing mission: Invalid hub ID. From: {from_hub_id}, To: {to_hub_id}")
+            return
+            
         mission_id = f"REBALANCE-{uuid.uuid4().hex[:6]}"
         mission_obj = Mission(
             mission_id=mission_id,

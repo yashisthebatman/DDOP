@@ -6,7 +6,9 @@ from ortools.constraint_solver import pywrapcp
 import numpy as np
 
 from ml_predictor.predictor import EnergyTimePredictor
-from config import DRONE_MAX_PAYLOAD_KG, HUBS
+from config import DRONE_MAX_PAYLOAD_KG
+# --- PERFORMANCE REFINEMENT: Use the efficient hub data getter ---
+from .dispatcher import get_processed_hubs
 
 class VRPSolver:
     """Uses Google OR-Tools to solve the Multi-Depot Vehicle Routing Problem."""
@@ -16,9 +18,10 @@ class VRPSolver:
 
     def _create_data_model(self, drones: List[Dict], orders: List[Dict]) -> Dict:
         """Prepares the data for the Multi-Depot VRP solver."""
-        # --- MODIFIED: Use hub IDs for mapping, consistent with the rest of the system ---
-        hub_ids = [h['id'] for h in HUBS]
-        hub_locations = [h['location'] for h in HUBS]
+        # --- PERFORMANCE REFINEMENT: Use pre-computed hub data ---
+        processed_hubs = get_processed_hubs()
+        hub_ids = [h['id'] for h in processed_hubs]
+        hub_locations = [h['location'] for h in processed_hubs]
         hub_map = {hub_id: i for i, hub_id in enumerate(hub_ids)}
         
         all_hubs_pos = hub_locations
@@ -42,13 +45,11 @@ class VRPSolver:
                 time, energy = self.predictor.predict(p1, p2, payload, wind, None)
                 cost_matrix[from_node, to_node] = int((time + energy) * 10)
         
-        # FIX: The cost to the 'sink' is now the cost to return to the nearest hub,
-        # ensuring the return trip is factored into the VRP solution.
+        # Cost to the 'sink' is the cost to return to the nearest hub.
         for from_node_idx in range(num_locations):
             from_pos = locations[from_node_idx]
             min_cost_to_hub = float('inf')
             for hub_pos in all_hubs_pos:
-                # Payload is 0 for the return trip
                 time, energy = self.predictor.predict(from_pos, hub_pos, 0, [0, 0, 0], None)
                 cost = int((time + energy) * 10)
                 min_cost_to_hub = min(min_cost_to_hub, cost)
@@ -66,7 +67,7 @@ class VRPSolver:
             'starts': starts,
             'ends': ends,
             'num_locations': num_locations + 1,
-            'hub_ids': hub_ids, # --- MODIFIED: Store IDs instead of names
+            'hub_ids': hub_ids,
             'hub_locations': hub_locations
         }
         return data
@@ -76,7 +77,8 @@ class VRPSolver:
             return []
 
         drone_map = {i: d for i, d in enumerate(drones)}
-        order_map = {i + len(HUBS): o for i, o in enumerate(orders)}
+        num_hubs = len(get_processed_hubs())
+        order_map = {i + num_hubs: o for i, o in enumerate(orders)}
 
         data = self._create_data_model(drones, orders)
         
@@ -119,7 +121,6 @@ class VRPSolver:
             return []
 
         tours = []
-        num_hubs = len(data['hub_ids'])
         
         for vehicle_id in range(data['num_vehicles']):
             index = routing.Start(vehicle_id)
@@ -132,20 +133,17 @@ class VRPSolver:
                 route.append(node_index)
                 index = solution.Value(routing.NextVar(index))
             
-            # A valid route must have a start and at least one stop.
             if len(route) <= 1: continue
 
-            # --- MODIFIED: Determine optimal end hub based on proximity to last stop ---
             last_real_node = route[-1]
             if last_real_node >= num_hubs:
                 last_stop_pos = order_map[last_real_node]['pos']
-                # Calculate distance to all hubs and pick the closest one
                 closest_hub_idx = np.argmin([
                     np.linalg.norm(np.array(last_stop_pos) - np.array(hub_loc)) 
                     for hub_loc in data['hub_locations']
                 ])
                 end_hub_id = data['hub_ids'][closest_hub_idx]
-            else: # The route was just hub-to-hub (empty)
+            else:
                 continue
             
             order_nodes = [node for node in route if node >= num_hubs]

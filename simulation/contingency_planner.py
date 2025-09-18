@@ -4,30 +4,30 @@ import uuid
 import numpy as np
 from typing import Dict, Any
 
-from config import HUBS, RTH_BATTERY_THRESHOLD_FACTOR, DRONE_BASE_POWER_WATTS, DRONE_ADDITIONAL_WATTS_PER_KG, DELIVERY_MANEUVER_TIME_SEC
+from config import RTH_BATTERY_THRESHOLD_FACTOR
 from utils.geometry import calculate_distance_3d
 from planners.single_agent_planner import SingleAgentPlanner
+# --- PERFORMANCE REFINEMENT: Use the efficient hub data getter ---
+from dispatch.dispatcher import get_processed_hubs
 
 def log_event(state, message):
     import time
     state['log'].insert(0, f"{time.strftime('%H:%M:%S')} - {message}")
 
 def _find_nearest_hub(pos, coord_manager):
-    """Finds the closest hub to a given world position."""
+    """Finds the closest hub to a given world position using pre-computed data."""
     pos_m = coord_manager.world_to_meters(pos)
-    hubs_with_dist = []
-    # MODIFIED: Demoted to DEBUG to keep INFO clean
-    logging.debug(f"[NearestHub] Finding nearest hub to position {pos}")
-    for hub in HUBS:
-        hub_pos_m = coord_manager.world_to_meters(hub['location'])
-        dist = calculate_distance_3d(pos_m, hub_pos_m)
-        hubs_with_dist.append((dist, hub['id'], hub['location']))
-        logging.debug(f"[NearestHub] ... distance to {hub['id']} is {dist:.2f}m")
+    
+    # --- PERFORMANCE REFINEMENT: Iterate over pre-processed hubs ---
+    # This avoids calling world_to_meters for every hub on every check.
+    hubs_with_dist = [
+        (calculate_distance_3d(pos_m, hub['location_m']), hub['id'], hub['location'])
+        for hub in get_processed_hubs()
+    ]
     
     if not hubs_with_dist: return None, None
     
     _, nearest_hub_id, nearest_hub_pos = min(hubs_with_dist, key=lambda x: x[0])
-    logging.debug(f"[NearestHub] ==> Selected '{nearest_hub_id}' as the closest.")
     return nearest_hub_id, nearest_hub_pos
 
 def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners: Dict):
@@ -42,12 +42,15 @@ def _trigger_emergency_return(state: Dict, drone_id: str, reason: str, planners:
     log_event(state, f"⚠️ CONTINGENCY: {drone_id} entering EMERGENCY_RETURN due to: {reason}.")
     if original_mission:
         orders_returned = 0
-        for order_id in original_mission.get('order_ids', []):
-            order_details = next((s for s in original_mission.get('stops', []) if s['id'] == order_id), None)
-            
-            if order_details and order_id not in state['pending_orders'] and order_id not in state['completed_orders']:
-                state['pending_orders'][order_id] = order_details
-                orders_returned += 1
+        current_stop_idx = original_mission.get('current_stop_index', 0)
+        
+        # --- REFINEMENT: Only return orders that have not yet been delivered ---
+        for i, stop in enumerate(original_mission.get('stops', [])):
+            if i >= current_stop_idx:
+                order_id = stop.get('id')
+                if order_id and order_id not in state['pending_orders']:
+                    state['pending_orders'][order_id] = stop
+                    orders_returned += 1
         
         if orders_returned > 0:
             logging.info(f"CONTINGENCY: Returned {orders_returned} undelivered orders from failed mission {original_mission_id} to pending queue.")
@@ -100,23 +103,15 @@ def check_for_contingencies(state: Dict, planners: Dict, drone: Dict) -> bool:
     mission = state['active_missions'].get(drone['mission_id'])
     if not mission: return False
     
-    # --- START: HYPER-DETAILED LOGGING ---
-    # This will log the exact state on every tick for the relevant drone during the failure window.
-    logging.debug(
-        f"[CON_CHECK] t={state['simulation_time']:.1f} | "
-        f"Drone: {drone['id']} | "
-        f"Status: {drone['status']} | "
-        f"Battery: {drone['battery']:.2f}Wh | "
-        f"Pos: ({drone['pos'][0]:.4f}, {drone['pos'][1]:.4f}, {drone['pos'][2]:.1f})"
-    )
-    # --- END: HYPER-DETAILED LOGGING ---
+    # --- LOGGING REMOVED ---
+    # The detailed per-tick debug logging has been removed.
 
     env = planners['env']
     predictor = planners['predictor']
     coord_manager = planners['coord_manager']
     drone_id = drone['id']
 
-    # --- Energy Check (using the simplified, safer logic) ---
+    # --- Energy Check ---
     _, nearest_hub_pos = _find_nearest_hub(drone['pos'], coord_manager)
     if nearest_hub_pos:
         return_wind = env.weather.get_wind_at_location(*drone['pos'])
@@ -124,9 +119,7 @@ def check_for_contingencies(state: Dict, planners: Dict, drone: Dict) -> bool:
         
         required_energy_for_survival = energy_to_return_to_nearest_hub * RTH_BATTERY_THRESHOLD_FACTOR
         
-        trigger_emergency = drone['battery'] < required_energy_for_survival
-        
-        if trigger_emergency:
+        if drone['battery'] < required_energy_for_survival:
             _trigger_emergency_return(state, drone_id, "Critically Low Battery", planners)
             return True
 
@@ -140,6 +133,8 @@ def check_for_contingencies(state: Dict, planners: Dict, drone: Dict) -> bool:
             start_check_idx = max(0, current_idx - 1)
             for i in range(start_check_idx, len(path) - 1):
                 if env.is_line_obstructed(path[i], path[i+1]):
+                    # REFINEMENT: Instead of a full emergency return, we could trigger a replan.
+                    # For now, the safer option is to trigger the existing robust emergency logic.
                     _trigger_emergency_return(state, drone_id, "Path Invalidated by NFZ", planners)
                     return True
     
