@@ -117,5 +117,3 @@ pytest
 ```
 
 ---
-
-*This project was developed by Yash Vardhan Chauhan as a showcase of advanced AI, simulation, and operational planning for the future of autonomous systems.*
