@@ -41,6 +41,8 @@ shutdown_event = threading.Event()
 
 def _create_building_mesh_data(building, coord_manager):
     center_x, center_y = building.center_xy
+    # REVERTED: Use the building's ACTUAL size from the environment.
+    # This restores the original, proportional building shapes from your video.
     size_x, size_y = building.size_xy
     height = building.height
     corners_world = [
@@ -161,7 +163,6 @@ def update_simulation(state, planners):
                 mission['current_path_target_index'] = min(len(mission.get('path_world_coords', [])) -1, mission['current_path_target_index'] + 1)
                 drone.pop('maneuver_complete_at', None)
 
-                # --- NEW: DETAILED LOG AT STATE TRANSITION ---
                 next_status = 'RETURNING_TO_HUB' if mission['current_stop_index'] >= len(mission.get('stops', [])) else 'EN ROUTE'
                 logging.info(f"STATE CHANGE: {drone['id']} finished delivery. Battery: {drone['battery']:.2f}Wh. New status: {next_status}.")
                 drone['status'] = next_status

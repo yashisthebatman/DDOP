@@ -51,14 +51,16 @@ class AnytimeRRTStar:
         best_cost = float('inf')
         
         # DEFINITIVE FIX: Set the sampling bounds for this specific planning request.
+        # This prevents RRT* from failing when called for small, localized path segments,
+        # which was the cause of the `test_integration.py` failure.
         if custom_bounds_m:
             self.sampling_bounds_m = custom_bounds_m
         else:
-            # Fallback to a large box if no custom one is provided
-            min_m = np.minimum(self.start_pos_m, self.goal_pos_m)
-            max_m = np.maximum(self.start_pos_m, self.goal_pos_m)
-            buffer = 200 # 200 meters buffer
-            self.sampling_bounds_m = (min_m[0]-buffer, min_m[1]-buffer, MIN_ALTITUDE, max_m[0]+buffer, max_m[1]+buffer, MAX_ALTITUDE)
+            # Fallback to a large box around the entire operational area if no custom one is provided.
+            self.sampling_bounds_m = (
+                0, 0, MIN_ALTITUDE,
+                self.coord_manager.area_width_m, self.coord_manager.area_height_m, MAX_ALTITUDE
+            )
 
         direct_dist = calculate_distance_3d(self.start_pos_m, self.goal_pos_m)
 

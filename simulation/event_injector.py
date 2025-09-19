@@ -15,7 +15,9 @@ def inject_random_event(state, env):
     With a small probability, injects a random event into the simulation.
     """
     # Trigger probability per simulation tick
-    if random.random() < 0.005:
+    # FIX: Drastically reduced the event probability from 0.005 to 0.0005.
+    # This prevents the simulation from being overwhelmed by constant path re-validations.
+    if random.random() < 0.0005:
         active_drones = [d for d in state['drones'].values() if d['status'] == 'EN ROUTE']
         
         # Only trigger an event if there's a drone to affect

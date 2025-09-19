@@ -35,8 +35,9 @@ def test_solves_crossing_conflict(mock_astar, mock_rrt, mock_timing_solver, mock
     start1, goal1 = (-74.01, 40.71, 50), (-73.99, 40.71, 50)
     start2, goal2 = (-74.00, 40.70, 50), (-74.00, 40.72, 50)
     
-    agent1 = Agent(id=1, start_pos=start1, goal_pos=goal1, config={})
-    agent2 = Agent(id=2, start_pos=start2, goal_pos=goal2, config={})
+    # FIX: Populate the `destinations` list for the new tour-aware planner.
+    agent1 = Agent(id=1, start_pos=start1, goal_pos=goal1, config={}, destinations=[goal1])
+    agent2 = Agent(id=2, start_pos=start2, goal_pos=goal2, config={}, destinations=[goal2])
 
     def astar_side_effect(grid, start_grid, goal_grid):
         return [start_grid, goal_grid]
@@ -60,7 +61,8 @@ def test_solves_crossing_conflict(mock_astar, mock_rrt, mock_timing_solver, mock
     path2_default = [(start2, 0), (goal2, 10)]
 
     def timing_side_effect(geom_path, constraints):
-        is_agent1 = np.allclose(geom_path[0], start1)
+        # A simple mock: if a path starts near start1, it's for agent1.
+        is_agent1 = np.allclose(geom_path[0], start1, atol=1e-5)
         if is_agent1:
             is_constrained = any(c.agent_id == 1 for c in constraints)
             return path1_wait if is_constrained else path1_default
@@ -74,5 +76,7 @@ def test_solves_crossing_conflict(mock_astar, mock_rrt, mock_timing_solver, mock
     assert solution is not None
     assert 1 in solution and 2 in solution
     
+    # FIX: The mock logic dictates that agent 2 gets the default path (duration 10)
+    # and agent 1 gets the delayed path (duration 12) to resolve the conflict.
     assert solution[2][-1][1] == 10
     assert solution[1][-1][1] == 12

@@ -86,7 +86,14 @@ class FleetManager:
             state['drones'][drone_id]['status'] = 'PLANNING'
             state['drones'][drone_id]['mission_id'] = mission_id
         
-        active_agent = Agent(id=drone_id, start_pos=mission.start_pos, goal_pos=mission.destinations[-1], config={'payload_kg': mission.payload_kg})
+        # FIX: Pass the full destinations list to the Agent so the planner is tour-aware.
+        active_agent = Agent(
+            id=drone_id, 
+            start_pos=mission.start_pos, 
+            goal_pos=mission.destinations[-1], 
+            config={'payload_kg': mission.payload_kg},
+            destinations=mission.destinations
+        )
         
         logging.info(f"FleetManager initiating CBSH planning for agent {drone_id} on mission {mission_id}.")
         solution = self.cbs_planner.plan_fleet([active_agent])

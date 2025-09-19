@@ -22,6 +22,10 @@ def mock_coord_manager():
     manager = MagicMock(spec=CoordinateManager)
     manager.world_to_meters.side_effect = lambda p: p
     manager.meters_to_world.side_effect = lambda p: p
+    # FIX: Add the missing attributes that the RRT* planner now uses for its
+    # default sampling bounds. This resolves the AttributeError in the tests.
+    manager.area_width_m = 10000.0
+    manager.area_height_m = 10000.0
     return manager
 
 def calculate_path_length(path):

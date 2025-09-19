@@ -11,7 +11,6 @@ from config import AREA_BOUNDS, MIN_ALTITUDE, MAX_ALTITUDE, NO_FLY_ZONES, HUBS, 
 from utils.geometry import line_segment_intersects_aabb
 from utils.coordinate_manager import CoordinateManager
 
-# ... (dataclasses and other classes are unchanged) ...
 @dataclass
 class Order:
     id: int
@@ -72,7 +71,6 @@ class Environment:
         self._index_static_nfzs()
         logging.info(f"Spatial index ready. Indexed {len(self.obstacles)} obstacles.")
     
-    # ... (get_building_at, get_surface_height, _add_obstacle_to_index are unchanged) ...
     def get_building_at(self, world_pos_xy: Tuple[float, float]) -> Optional[Building]:
         lon, lat = world_pos_xy
         for building in self.buildings:
@@ -96,7 +94,6 @@ class Environment:
     def _generate_and_index_buildings(self) -> List[Building]:
         buildings = []
         np.random.seed(42)
-        # FIX: Get hub locations from the new list format
         hub_locations = [h['location'] for h in HUBS]
         all_poi = hub_locations + list(DESTINATIONS.values())
 
@@ -130,7 +127,6 @@ class Environment:
                 self._add_obstacle_to_index((min_mx, min_my, 0, max_mx, max_my, altitude))
         return buildings
     
-    # ... (rest of Environment class is unchanged) ...
     def _index_static_nfzs(self):
         for zone in self.static_nfzs:
             bottom_left_world = (zone[0], zone[1], MIN_ALTITUDE)

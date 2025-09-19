@@ -25,16 +25,22 @@ def mock_predictor():
 
 @pytest.fixture
 def vrp_solver(mock_predictor):
-    # The solver requires the old dict format for HUBS, so we create it for the test.
-    hubs_dict = {h['name']: h['location'] for h in HUBS}
-    with patch('dispatch.vrp_solver.HUBS', hubs_dict):
+    # FIX: The vrp_solver now imports `get_processed_hubs`. We must patch this
+    # function to provide controlled hub data for the tests. The old patch
+    # target (`dispatch.vrp_solver.HUBS`) was incorrect and caused an AttributeError.
+    with patch('dispatch.vrp_solver.get_processed_hubs') as mock_get_hubs:
+        # Provide a mock return value that matches the real function's output format.
+        processed_hubs_mock = [
+            {'id': h['id'], 'name': h['name'], 'location': h['location']} for h in HUBS
+        ]
+        mock_get_hubs.return_value = processed_hubs_mock
         yield VRPSolver(mock_predictor)
 
 def test_correct_batching_mdvrp(vrp_solver):
     """Assert the MDVRP solver creates two tours, with one drone taking two packages that are close to each other."""
     drones = [
-        {'id': 'D1', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.5},
-        {'id': 'D2', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.5}
+        {'id': 'D1', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "HUB_A", 'max_payload_kg': 2.5},
+        {'id': 'D2', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "HUB_A", 'max_payload_kg': 2.5}
     ]
     orders = [
         {'id': 'O1', 'pos': (-73.98, 40.73, 50), 'payload_kg': 1.0},   # Far
@@ -55,14 +61,14 @@ def test_correct_batching_mdvrp(vrp_solver):
     tour_with_1_stop = next((t for t in tours if len(t['stops']) == 1), None)
     assert tour_with_1_stop is not None
     assert tour_with_1_stop['stops'][0]['id'] == 'O1'
-    assert tour_with_1_stop['start_hub_id'] == "Hub A (South Manhattan)"
+    assert tour_with_1_stop['start_hub_id'] == "HUB_A"
 
 
 def test_payload_capacity_is_respected_mdvrp(vrp_solver):
     """Give two drones a 2kg capacity and two 1.5kg orders. Assert they are assigned to different tours."""
     drones = [
-        {'id': 'D1', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.0},
-        {'id': 'D2', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.0}
+        {'id': 'D1', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "HUB_A", 'max_payload_kg': 2.0},
+        {'id': 'D2', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "HUB_A", 'max_payload_kg': 2.0}
     ]
     orders = [
         {'id': 'O1', 'pos': (-74.0, 40.71, 50), 'payload_kg': 1.5},
@@ -81,7 +87,7 @@ def test_payload_capacity_is_respected_mdvrp(vrp_solver):
 def test_returns_no_solution_if_infeasible_mdvrp(vrp_solver):
     """Provide an order that is too heavy for any drone. Assert the solver returns an empty list."""
     drones = [
-        {'id': 'D1', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "Hub A (South Manhattan)", 'max_payload_kg': 2.0}
+        {'id': 'D1', 'pos': get_hub_loc_by_name("Hub A (South Manhattan)"), 'home_hub': "HUB_A", 'max_payload_kg': 2.0}
     ]
     orders = [
         {'id': 'O1', 'pos': (-74.0, 40.71, 50), 'payload_kg': 3.0} # Too heavy

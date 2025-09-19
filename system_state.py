@@ -2,7 +2,7 @@
 
 import os
 import numpy as np
-from tinydb import TinyDB, JSONStorage
+from tinydb import TinyDB, JSONStorage, Query
 import uuid
 import json
 import random
@@ -42,7 +42,9 @@ def get_initial_state():
             }
             drone_counter += 1
 
+    # FIX: Add a doc_id to the state itself for easier querying with TinyDB.
     return {
+        'doc_id': STATE_DOC_ID,
         'drones': drones, 'pending_orders': {}, 'active_missions': {},
         'completed_missions': {}, 'completed_orders': [], 'simulation_time': 0.0,
         'log': ["System initialized. Add orders to begin."], 'simulation_running': False,
@@ -52,7 +54,8 @@ def get_initial_state():
 def load_state():
     """Loads the system state, ensuring all keys and drone IDs are present."""
     db = TinyDB(DB_FILE, storage=JSONStorage, indent=4, cls=NumpyJSONEncoder)
-    state_doc = db.get(doc_id=STATE_DOC_ID)
+    StateQuery = Query()
+    state_doc = db.get(StateQuery.doc_id == STATE_DOC_ID)
 
     if state_doc:
         initial_state = get_initial_state()
@@ -66,16 +69,22 @@ def load_state():
     else:
         initial_state = get_initial_state()
         db.insert(initial_state)
-        return db.get(doc_id=STATE_DOC_ID)
+        return db.get(StateQuery.doc_id == STATE_DOC_ID)
 
 def save_state(state):
     db = TinyDB(DB_FILE, storage=JSONStorage, indent=4, cls=NumpyJSONEncoder)
-    db.update(state, doc_ids=[STATE_DOC_ID])
+    StateQuery = Query()
+    # FIX: The correct syntax for upsert requires a Query object.
+    # This will update the document where doc_id matches, or insert it if it doesn't exist.
+    # This robustly handles the reset race condition and prevents crashes.
+    db.upsert(state, StateQuery.doc_id == STATE_DOC_ID)
 
 def reset_state_file():
-    if os.path.exists(DB_FILE):
-        os.remove(DB_FILE)
     db = TinyDB(DB_FILE, storage=JSONStorage, indent=4, cls=NumpyJSONEncoder)
+    # FIX: Truncate is safer than deleting the file. It empties the database.
+    db.truncate()
     initial_state = get_initial_state()
+    # Re-insert the fresh initial state.
     db.insert(initial_state)
-    return db.get(doc_id=STATE_DOC_ID)
+    StateQuery = Query()
+    return db.get(StateQuery.doc_id == STATE_DOC_ID)

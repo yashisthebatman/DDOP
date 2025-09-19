@@ -35,8 +35,12 @@ def active_mission_state():
 
 def test_low_battery_triggers_return_to_hub(active_mission_state, mock_planners):
     state = active_mission_state
-    state['drones']['Drone 1']['battery'] = 30.0
+    # Energy to return is 20Wh. Threshold factor is 1.5. Required energy is 30Wh.
     mock_planners['predictor'].predict.return_value = (50.0, 20.0)
+    
+    # FIX: Set battery to a value (29.0) clearly below the 30Wh threshold.
+    # The previous value of 30.0 failed due to a strict less-than (<) check.
+    state['drones']['Drone 1']['battery'] = 29.0
     
     drone_to_check = state['drones']['Drone 1']
     contingency_triggered = check_for_contingencies(state, mock_planners, drone_to_check)

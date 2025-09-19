@@ -15,6 +15,8 @@ class Agent:
     start_pos: WorldPosition
     goal_pos: WorldPosition
     config: Dict[str, Any]  # payload_kg, optimization weights, etc.
+    # NEW: Add destinations to make the agent tour-aware for the planner.
+    destinations: List[WorldPosition] = field(default_factory=list)
 
 @dataclass(frozen=True, eq=True)
 class Constraint:

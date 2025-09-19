@@ -1,144 +1,121 @@
-# DDOP — Drone Delivery Path Optimisation
+# Q-DOP: Quantum Drone Operations Platform
 
-Energy- and time‑aware multi‑depot drone routing with 3D path planning and airspace deconfliction.
+**An Enterprise-Grade Digital Twin for Autonomous Urban Air Mobility**
 
-## Overview
-DDOP combines:
-- Multi‑depot vehicle routing (capacity/battery aware) using Google OR‑Tools
-- Global path planning (RRT*, D* Lite) for obstacle‑aware 3D routes
-- Conflict‑aware timing to maintain spatio‑temporal separation
-- A deterministic simulation loop with realistic delivery maneuvers
-- Centralized configuration for energy, safety, planner, and mission rules
+---
 
-## Features
-- Multi‑Depot VRP
-  - Time + energy‑aware costs via an `EnergyTimePredictor`
-  - Per‑drone capacity constraints; hub‑based starts; flexible end hubs
-  - Outputs tours with drone, hubs, ordered stops, and total payload
-  - Code: [dispatch/vrp_solver.py](dispatch/vrp_solver.py)
+## The Future of Logistics is Not on the Ground. It's in the Sky.
 
-- Intelligent Dispatch
-  - Batches on size or presence of high‑priority orders
-  - Eligibility checks (status + battery margin)
-  - Safe order lifecycle (removed only after planning succeeds)
-  - Code: [dispatch/dispatcher.py](dispatch/dispatcher.py)
+**Q-DOP (Quantum Drone Operations Platform)** is not just a simulation; it's a digital twin for the future of last-mile delivery. This platform provides a comprehensive, end-to-end solution for managing a fleet of autonomous delivery drones navigating the complex, three-dimensional landscape of a dense city. From intelligent, AI-powered dispatching to sophisticated, multi-layered pathfinding and dynamic, real-world event handling, Q-DOP is engineered to tackle the most challenging aspects of urban drone logistics.
 
-- Global Path Planning
-  - RRT* (asymptotically optimal sampling) and D* Lite (fast re‑planning)
-  - Produces waypointed 3D paths for timing and execution
-  - Parameters in [config.py](config.py); helpers in [utils/](utils)
+Our mission is to provide the critical infrastructure for planning, testing, and deploying drone fleets safely and efficiently, paving the way for the next generation of automated commerce.
 
-- Time‑Parameterized Deconfliction
-  - Aligns arrival times to avoid vertex/edge conflicts
-  - Limited waiting; finite horizons for responsiveness
-  - Code: [utils/path_timing_solver.py](utils/path_timing_solver.py)
+---
 
-- Airspace Safety
-  - Separation bubble and altitude‑offset avoidance maneuvers
-  - Automatic return from avoidance to mission state
-  - Simulation in [server.py](server.py); parameters in [config.py](config.py)
+## Core Features & Technological Edge
 
-- Energy & Mission Constraints
-  - Base/extra power, ascent efficiency, turn penalty
-  - RTH margin, recharge time, pre‑dispatch battery thresholds
-  - Parameters in [config.py](config.py)
+Q-DOP is built on a foundation of cutting-edge algorithms and a robust, real-time architecture. Here's what sets it apart:
 
-- Mission Execution
-  - States: IDLE → PLANNING → EN ROUTE → PERFORMING_DELIVERY → EN ROUTE …
-  - Delivery maneuver with controlled descent/ascent and duration
-  - Code: [server.py](server.py)
+### **Intelligent Fleet & Mission Control**
 
-## Installation
-Prerequisites: Python 3.10+, recommended: `numpy`, `ortools`.
+-   **Real-Time 3D Digital Twin:** A dynamic, interactive 3D environment built with **Plotly.js** provides unparalleled situational awareness, visualizing every drone, flight path, and obstacle in real-time.
+-   **Multi-Depot Vehicle Routing (MDVRP):** Our "Dispatch Batch" system, powered by **Google OR-Tools**, transcends simple one-to-one assignments. It solves the complex Vehicle Routing Problem to create globally optimized, multi-stop delivery tours, maximizing fleet efficiency and minimizing delivery times.
+-   **Automated Fleet Rebalancing:** A background **Demand Analyzer** perpetually monitors fleet distribution. It autonomously identifies logistical imbalances—too many drones at one hub, not enough at another—and dispatches drones on rebalancing missions to preemptively meet demand.
+-   **ML-Powered Performance Prediction:** A sophisticated **Random Forest Regressor** model predicts flight time and energy consumption with remarkable accuracy, accounting for payload, distance, altitude changes, and dynamic weather. This intelligence is crucial for reliable dispatching and contingency planning.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install --upgrade pip
-pip install numpy ortools
-# If available:
-# pip install -r requirements.txt
-# or
-# pip install .
+### **Advanced Path Planning & Deconfliction**
+
+-   **Hybrid Hierarchical Path Planning Engine:** We employ a two-tiered planning strategy for the perfect blend of speed and precision:
+    1.  **Strategic Layer (A*):** A high-speed A* search on a cost-based coarse 3D grid maps out a safe, high-level "freeway in the sky."
+    2.  **Tactical Layer (Anytime RRT*):** Within this strategic corridor, an Anytime Rapidly-exploring Random Tree Star (RRT*) algorithm generates a smooth, kinematically feasible flight path that elegantly weaves around obstacles.
+-   **Guaranteed Collision Avoidance (Conflict-Based Search):** For multi-drone scenarios, Q-DOP uses a high-level **Conflict-Based Search (CBS)** solver. It systematically identifies and resolves potential path conflicts *before* drones are dispatched, guaranteeing collision-free routes by strategically inserting wait times or minor detours.
+
+### **Resilience & Dynamic Simulation**
+
+-   **Intelligent Contingency Management:** Drones are not just planners; they are problem-solvers.
+    -   **Critical Battery Failsafe:** Each drone continuously calculates its "point of no return." If its battery level drops below the threshold needed to reach the *nearest* safe hub, it automatically aborts its current mission and initiates an emergency landing.
+    -   **Dynamic Obstacle & NFZ Reaction:** The simulation can inject unexpected **No-Fly Zones (NFZs)**. Drones whose paths are invalidated by these new obstacles instantly trigger their contingency planners to find a safe way out.
+-   **Dynamic Weather System:** A **Perlin noise-based** weather simulation creates realistic, evolving wind patterns that directly impact drone battery consumption and flight speed, forcing the entire system to adapt to real-world variability.
+-   **Continuous Learning & Model Improvement:** The platform is built for the future. A dedicated retraining pipeline allows new flight data from completed missions to be fed back into the ML model, constantly improving its prediction accuracy over time.
+
+---
+
+## Technical Architecture
+
+-   **Frontend:** A lightweight, responsive single-page application built with vanilla **HTML, CSS, and JavaScript**. It maintains a persistent **WebSocket** connection for real-time, low-latency updates from the server.
+-   **Backend:** A high-performance asynchronous server built with **Python** and the **FastAPI** framework, running on **Uvico.rn**. It manages the core simulation loop, handles all API requests, and broadcasts state changes to all connected clients.
+-   **Core Engine:**
+    -   **Simulation Loop:** A time-stepped engine that updates drone physics, checks for events, and advances the state of the world.
+    -   **Planning Stack:** A sophisticated combination of A*, RRT*, and Conflict-Based Search for multi-layered, deconflicted pathfinding.
+    -   **State Management:** A robust system using **TinyDB** to persist the complete simulation state, allowing for pauses and resumes.
+    -   **Optimization & ML:** Integrates **Google OR-Tools** for VRP and **Scikit-learn** for performance prediction.
+
+---
+
+## Getting Started
+
+### Prerequisites
+-   Python 3.10 or higher
+-   `pip` package manager
+-   `venv` module for virtual environments
+
+### Installation & Launch
+
+1.  **Clone the Repository**
+    ```sh
+    git clone https://github.com/yashisthebatman/Q-DOP.git
+    cd Q-DOP
+    ```
+
+2.  **Set Up Virtual Environment**
+    ```sh
+    # Windows
+    python -m venv venv
+    .\venv\Scripts\Activate.ps1
+
+    # macOS / Linux
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+
+3.  **Install Dependencies**
+    ```sh
+    pip install -r requirements.txt
+    ```
+
+4.  **Launch the Server**
+    ```sh
+    uvicorn server:app --reload
+    ```
+
+5.  **Access the Platform**
+    Open your web browser and navigate to **`http://127.0.0.1:8000`**.
+
+---
+
+## How to Use the Platform
+
+1.  **Initialize:** The platform will load with an idle fleet and a 3D view of the city.
+2.  **Start Simulation:** Click the green **`▶ Run Sim`** button to begin advancing simulation time.
+3.  **Create Orders:** In the "Add New Order" panel, select a dispatch hub, a destination, and a payload weight. Click **`Add Order`**.
+4.  **Dispatch:**
+    -   Orders are dispatched **automatically** to the best-suited idle drone at the selected hub.
+    -   Alternatively, add multiple orders and click **`Dispatch Batch`** to see the powerful VRP solver optimize multi-stop tours for the entire fleet.
+5.  **Observe & Monitor:** Watch as drones transition from `IDLE` to `PLANNING` to `EN ROUTE`. Track their progress in the 3D view and monitor their status, battery, and logs in the side panels.
+6.  **Simulate Events:** The system will randomly introduce dynamic No-Fly Zones. Watch how the affected drones react, aborting their missions and returning to the nearest hub.
+7.  **Reset:** Click the **`⚠️ Reset`** button to clear all progress and return the simulation to its initial state.
+
+---
+
+## Running the Test Suite
+
+Our platform is backed by a comprehensive test suite to ensure the reliability of our complex planning and simulation logic.
+
+To run all tests, execute the following command from the project root:
+```sh
+pytest
 ```
 
-## Configuration
-Edit [config.py](config.py):
-- Hubs: `HUBS = {"HUB_A": (x, y, z), ...}`
-- Drone performance: payload, speeds, energy model
-- Safety: `SAFETY_BUBBLE_RADIUS_METERS`, `AVOIDANCE_MANEUVER_ALTITUDE_SEP`
-- Planner/timing: `MAX_PATH_LENGTH`, `MAX_WAIT_TIME`, `MAX_TIME_STEPS`
-- Mission: `DELIVERY_MANEUVER_TIME_SEC`, `DRONE_RECHARGE_TIME_S`, `RTH_BATTERY_THRESHOLD_FACTOR`
+---
 
-Example:
-```python
-ASCENT_EFFICIENCY = 0.7
-GRAVITY = 9.81
-TURN_ENERGY_FACTOR = 0.005
-DRONE_BASE_POWER_WATTS = 50.0
-DRONE_ADDITIONAL_WATTS_PER_KG = 10.0
-RTH_BATTERY_THRESHOLD_FACTOR = 1.5
-DRONE_RECHARGE_TIME_S = 30.0
-
-MAX_PATH_LENGTH = 5000
-DELIVERY_MANEUVER_TIME_SEC = 90
-SAFETY_BUBBLE_RADIUS_METERS = 30.0
-AVOIDANCE_MANEUVER_ALTITUDE_SEP = 15.0
-```
-
-## Quick Start
-```python
-from dispatch.vrp_solver import VRPSolver
-from dispatch.dispatcher import Dispatcher
-from ml_predictor.predictor import EnergyTimePredictor
-
-predictor = EnergyTimePredictor(...)  # your model or heuristic
-vrp = VRPSolver(predictor=predictor)
-dispatcher = Dispatcher(vrp_solver=vrp)
-
-state = {
-    "simulation_time": 0.0,
-    "pending_orders": {
-        "O1": {"id": "O1", "pos": (120.0, 80.0, 0.0), "payload_kg": 1.2, "high_priority": False},
-        "O2": {"id": "O2", "pos": (300.0, -50.0, 0.0), "payload_kg": 0.8, "high_priority": True},
-    },
-    "drones": {
-        "D1": {"status": "IDLE", "home_hub": "HUB_A", "battery": 200.0, "max_payload_kg": 2.0, "pos": (0.0, 0.0, 30.0)},
-        "D2": {"status": "IDLE", "home_hub": "HUB_B", "battery": 180.0, "max_payload_kg": 3.0, "pos": (10.0, 10.0, 30.0)},
-    },
-    "active_missions": {}
-}
-
-dispatched = dispatcher.dispatch_missions(state)
-print("Dispatched:", dispatched)
-print("Active missions:", state["active_missions"])
-```
-
-Simulation loop (if exposed):
-```python
-from server import update_simulation
-planners = {...}  # global planners + timing/deconfliction
-for step in range(1000):
-    update_simulation(state, planners)
-```
-
-## Project Structure (selected)
-- [dispatch/vrp_solver.py](dispatch/vrp_solver.py) — MDVRP with time/energy costs, capacity constraints
-- [dispatch/dispatcher.py](dispatch/dispatcher.py) — batching, drone selection, mission creation
-- [utils/path_timing_solver.py](utils/path_timing_solver.py) — timing & deconfliction
-- [server.py](server.py) — simulation loop and mission state machine
-- [ml_predictor/predictor.py](ml_predictor/predictor.py) — energy/time prediction interface
-- [utils/geometry.py](utils/geometry.py), [utils/coordinate_manager.py](utils/coordinate_manager.py) — geometry and transforms
-- [config.py](config.py) — parameters
-
-## Production Notes
-- Cost fidelity: supply realistic wind/payload to the predictor
-- Scale: increase OR‑Tools time limits for larger batches/hubs
-- Safety: tune separation/altitude parameters to your airspace
-- Ops: align delivery duration and RTH margins with policy
-
-## Contributing
-Issues and PRs are welcome. Keep formatting consistent and include tests for new logic.
-
-## License
-See `LICENSE` in the repository root.
+*This project was developed by Yash Vardhan Chauhan as a showcase of advanced AI, simulation, and operational planning for the future of autonomous systems.*

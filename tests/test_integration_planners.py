@@ -40,7 +40,9 @@ def test_hybrid_planner_finds_path(real_planner):
     """
     An integration test to ensure the full Hybrid A*/RRT* stack can find a path.
     """
-    agent1 = Agent(id=1, start_pos=(-74.01, 40.71, 50), goal_pos=(-74.00, 40.72, 50), config={})
+    start_pos, goal_pos = (-74.01, 40.71, 50), (-74.00, 40.72, 50)
+    # FIX: Populate the `destinations` list for the new tour-aware planner.
+    agent1 = Agent(id=1, start_pos=start_pos, goal_pos=goal_pos, config={}, destinations=[goal_pos])
     
     solution = real_planner.plan_fleet([agent1])
 

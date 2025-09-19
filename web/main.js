@@ -1,8 +1,23 @@
 // FILE: web/main.js
-
 let plotInitialized = false;
 const plotContainer = document.getElementById('plotContainer');
 const socket = new WebSocket(`ws://${window.location.host}/ws`);
+
+// Define the layout object once, using the original dark theme settings.
+const plotlyLayout = {
+    title: 'Drone Operations - 3D View',
+    showlegend: true,
+    scene: {
+        xaxis: { title: 'X (meters)' },
+        yaxis: { title: 'Y (meters)' },
+        zaxis: { title: 'Z (meters - Altitude)' },
+        aspectmode: 'data'
+    },
+    margin: { l: 0, r: 0, b: 0, t: 40 },
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(0,0,0,0)',
+    font: { color: '#e0e0e0' }
+};
 
 socket.onopen = () => console.log("WebSocket connection established.");
 socket.onclose = () => console.log("WebSocket connection closed.");
@@ -21,24 +36,11 @@ socket.onmessage = (event) => {
         
         if (message.plotly_data) {
             if (!plotInitialized) {
-                const layout = {
-                    title: 'Drone Operations - 3D View',
-                    showlegend: true,
-                    scene: {
-                        xaxis: { title: 'X (meters)' },
-                        yaxis: { title: 'Y (meters)' },
-                        zaxis: { title: 'Z (meters - Altitude)' },
-                        aspectmode: 'data'
-                    },
-                    margin: { l: 0, r: 0, b: 0, t: 40 },
-                    paper_bgcolor: 'rgba(0,0,0,0)',
-                    plot_bgcolor: 'rgba(0,0,0,0)',
-                    font: { color: '#e0e0e0' }
-                };
-                Plotly.newPlot(plotContainer, message.plotly_data, layout);
+                Plotly.newPlot(plotContainer, message.plotly_data, plotlyLayout);
                 plotInitialized = true;
             } else {
-                Plotly.react(plotContainer, message.plotly_data);
+                // THIS IS THE CRITICAL LINE TO PREVENT THE VISUAL GLITCH
+                Plotly.react(plotContainer, message.plotly_data, plotlyLayout);
             }
         }
     }
@@ -78,7 +80,6 @@ function updateUI(message) {
 
     updateDroneStatusList(drones);
     updatePendingOrdersTable(Object.values(state.pending_orders || {}));
-    // --- SIMPLIFIED: Use pre-computed data from the backend ---
     updateInProcessOrdersTable(message.in_process_orders || []);
     updateCompletedMissionsTable(state.completed_missions_log || []);
     updateEventLog(state.log || []);
@@ -135,7 +136,6 @@ function updatePendingOrdersTable(orders) {
     tableBody.innerHTML = html;
 }
 
-// --- SIMPLIFIED: This function now just renders the data from the backend ---
 function updateInProcessOrdersTable(inProcessOrders) {
     const tableBody = document.querySelector("#inProcessOrdersTable tbody");
     if (inProcessOrders.length === 0) {
@@ -196,7 +196,6 @@ function setupEventListeners() {
             sendCommand('reset_simulation');
         }
     });
-    // --- NEW: Event listener for the batch dispatch button ---
     document.getElementById('batchDispatchButton').addEventListener('click', () => {
         showNotification('Initiating batch dispatch...', 'info');
         sendCommand('dispatch_batch');

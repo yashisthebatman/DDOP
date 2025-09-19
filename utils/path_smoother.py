@@ -26,11 +26,11 @@ class PathSmoother:
         # return the de-duplicated path itself. This prevents collapsing a valid
         # short path (e.g., [A, B] where A is close to B) into an invalid one-point path.
         if len(unique_path) < 2:
-            return path # Return original if it becomes 1 or 0 points
-        if len(unique_path) < 4:
-            # For short paths, spline smoothing is not necessary and can be unstable.
-            return unique_path
+            return unique_path # Return de-duplicated path
 
+        # FIX: Removed the overly cautious check for `len < 4`. The spline
+        # degree calculation correctly handles shorter paths (2 or 3 points),
+        # allowing them to be densified into smoother lines.
         path = unique_path # Use the cleaned path for smoothing
         
         if depth > 2:
